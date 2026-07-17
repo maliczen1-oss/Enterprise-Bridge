@@ -1,58 +1,43 @@
-"""
-Health router — GET /health
-
-The only endpoint that does not require authentication.  Returns a rich
-status payload so operations teams can monitor the bridge at a glance.
-"""
-
-from __future__ import annotations
-
-import time
+# api/health.py
+from fastapi import APIRouter
+from core import models
+from core.connection_manager import manager as connection_manager
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+router = APIRouter()
 
-from bridge.core.models import HealthData
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import success_response
+@router.get("/health", response_model=models.BridgeResponse)
+async def health():
+    cm_health = connection_manager.get_health()
+    connection_state = cm_health.get("connectionState")
+    mt5_initialized = cm_health.get("mt5Initialized", False)
+    terminal_version = cm_health.get("terminalVersion")
+    last_error = cm_health.get("lastError")
 
-router = APIRouter(tags=["Health"])
+    # Bridge is READY when connection is CONNECTED; otherwise report FAILED but still include data
+    bridge_status = "READY" if connection_state == "CONNECTED" else "FAILED" if connection_state == "FAILED" else "READY"
 
+    data = {
+        "bridgeStatus": bridge_status,
+        "connectionState": connection_state,
+        "mt5Initialized": mt5_initialized,
+        "terminalVersion": terminal_version,
+        "lastError": last_error,
+    }
 
-@router.get(
-    "/health",
-    summary="Bridge health check",
-    description=(
-        "Returns the current operational status of the WealthBuilder Bridge. "
-        "This endpoint is publicly accessible and does not require authentication."
-    ),
-    response_description="Bridge status payload.",
-)
-async def health_check(request: Request) -> JSONResponse:
-    """Return the current health and uptime of the bridge."""
-    from bridge.config import settings  # deferred to avoid circular import
+    envelope = {
+        "success": connection_state == "CONNECTED",
+        "requestId": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": data if connection_state == "CONNECTED" else None,
+        "error": None if connection_state == "CONNECTED" else {
+            "code": "CONNECTION_NOT_READY",
+            "message": "MT5 connection is not ready. See lastError for details."
+        }
+    }
 
-    startup_time: datetime = request.app.state.startup_time
-    uptime_seconds: float = time.monotonic() - request.app.state.startup_monotonic
+    # When not connected, still include the data block per mission but mark success false
+    if connection_state != "CONNECTED":
+        envelope["data"] = data
 
-    connection_manager = request.app.state.connection_manager
-    bridge_status = connection_manager.state.value
-
-    payload = HealthData(
-        applicationName=settings.app_title,
-        applicationVersion=settings.app_version,
-        apiVersion=settings.api_version,
-        environment=settings.environment,
-        startupTime=startup_time,
-        uptimeSeconds=round(uptime_seconds, 3),
-        bridgeStatus=bridge_status,
-    )
-
-    return JSONResponse(
-        status_code=200,
-        content=success_response(
-            request_id=get_request_id(),
-            data=payload.model_dump(by_alias=True, mode="json"),
-        ),
-    )
+    return envelope
