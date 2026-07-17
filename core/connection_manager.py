@@ -1,9 +1,10 @@
 # core/connection_manager.py
 """
 Connection manager that uses core.mt5_client.MT5Client to manage the
-MetaTrader5 terminal lifecycle.
+MetaTrader5 terminal lifecycle and provide read-only data proxies for
+services.
 
-Public interface:
+Public interface (selected):
     start()
     stop()
     restart()
@@ -13,12 +14,22 @@ Public interface:
     get_version()
     get_last_error()
     get_health()
+
+Read-only proxies:
+    fetch_account()
+    fetch_positions()
+    fetch_symbols()
+    fetch_symbol_info(symbol)
+    fetch_symbol_tick(symbol)
+    fetch_history_deals(from_dt, to_dt, ticket=None, symbol=None)
+    fetch_history_orders(from_dt, to_dt, ticket=None, symbol=None)
 """
 import threading
 import time
 import logging
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+import datetime
 
 from config import settings
 from core.mt5_client import MT5Client, MT5UnavailableError
@@ -46,7 +57,7 @@ class ConnectionManager:
         self._last_error: Optional[Dict[str, Any]] = None
         self._startup_time: Optional[float] = None
 
-    # Internal helpers
+    # Internal helpers -------------------------------------------------
     def _set_state(self, new_state: ConnectionState):
         with self._lock:
             prev = self._state
@@ -71,7 +82,7 @@ class ConnectionManager:
         self._last_error = {"code": code, "message": message, "timestamp": time.time()}
         logger.error("Connection error: %s - %s", code, message)
 
-    # Public API
+    # Public API - lifecycle ------------------------------------------
     def start(self):
         with self._lock:
             if self._state in (ConnectionState.CONNECTED, ConnectionState.CONNECTING, ConnectionState.INITIALIZING):
@@ -81,7 +92,6 @@ class ConnectionManager:
             logger.info("Bridge Starting")
             self._set_state(ConnectionState.INITIALIZING)
 
-            # Initialize MT5 client
             logger.info("Initializing MT5")
             try:
                 try:
@@ -120,7 +130,6 @@ class ConnectionManager:
                 password = settings.MT5_PASSWORD
                 server = settings.MT5_SERVER
 
-                # Do not log credentials
                 login_ok = False
                 try:
                     login_ok = self._client.login(login=login, password=password, server=server)
@@ -137,7 +146,6 @@ class ConnectionManager:
                     self._set_state(ConnectionState.FAILED)
                     return
 
-                # Record terminal info and version
                 try:
                     info = self._client.terminal_info()
                     version = self._client.version()
@@ -170,7 +178,6 @@ class ConnectionManager:
                     ok = self._client.shutdown()
                     if not ok:
                         self._record_error("MT5_SHUTDOWN_FAILED", "mt5.shutdown() reported failure")
-                # Clear state regardless of shutdown success
             except Exception as exc:
                 self._record_error("MT5_SHUTDOWN_EXCEPTION", str(exc))
             finally:
@@ -184,9 +191,7 @@ class ConnectionManager:
     def restart(self):
         with self._lock:
             logger.info("Reconnect Attempt")
-            # stop then start
             self.stop()
-            # small backoff
             time.sleep(0.1)
             self.start()
 
@@ -219,6 +224,90 @@ class ConnectionManager:
                 "lastError": self._last_error,
                 "startupTime": self._startup_time,
             }
+
+    # Read-only proxies for services -----------------------------------
+    def _ensure_ready_for_reads(self) -> bool:
+        """
+        Return True if the manager is in a state where read-only MT5 calls
+        are expected to succeed. Otherwise record an error and return False.
+        """
+        with self._lock:
+            if self._state != ConnectionState.CONNECTED or not self._mt5_initialized:
+                self._record_error("BRIDGE_NOT_CONNECTED", "Bridge is not connected to MT5")
+                return False
+            return True
+
+    def fetch_account(self) -> Optional[Dict[str, Any]]:
+        """
+        Return account info dict or None.
+        """
+        if not self._ensure_ready_for_reads():
+            return None
+        try:
+            return self._client.account_info()
+        except Exception as exc:
+            self._record_error("FETCH_ACCOUNT_FAILED", str(exc))
+            return None
+
+    def fetch_positions(self) -> List[Dict[str, Any]]:
+        """
+        Return list of positions (possibly empty).
+        """
+        if not self._ensure_ready_for_reads():
+            return []
+        try:
+            return self._client.positions_get()
+        except Exception as exc:
+            self._record_error("FETCH_POSITIONS_FAILED", str(exc))
+            return []
+
+    def fetch_symbols(self) -> List[Dict[str, Any]]:
+        """
+        Return list of symbols (possibly empty).
+        """
+        if not self._ensure_ready_for_reads():
+            return []
+        try:
+            return self._client.symbols_get()
+        except Exception as exc:
+            self._record_error("FETCH_SYMBOLS_FAILED", str(exc))
+            return []
+
+    def fetch_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        if not self._ensure_ready_for_reads():
+            return None
+        try:
+            return self._client.symbol_info(symbol)
+        except Exception as exc:
+            self._record_error("FETCH_SYMBOL_INFO_FAILED", str(exc))
+            return None
+
+    def fetch_symbol_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
+        if not self._ensure_ready_for_reads():
+            return None
+        try:
+            return self._client.symbol_info_tick(symbol)
+        except Exception as exc:
+            self._record_error("FETCH_SYMBOL_TICK_FAILED", str(exc))
+            return None
+
+    def fetch_history_deals(self, from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self._ensure_ready_for_reads():
+            return []
+        try:
+            return self._client.history_deals_get(from_dt, to_dt, ticket=ticket, symbol=symbol)
+        except Exception as exc:
+            self._record_error("FETCH_HISTORY_DEALS_FAILED", str(exc))
+            return []
+
+    def fetch_history_orders(self, from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        if not self._ensure_ready_for_reads():
+            return []
+        try:
+            return self._client.history_orders_get(from_dt, to_dt, ticket=ticket, symbol=symbol)
+        except Exception as exc:
+            self._record_error("FETCH_HISTORY_ORDERS_FAILED", str(exc))
+            return []
 
 
 # Module-level singleton for wiring in app
