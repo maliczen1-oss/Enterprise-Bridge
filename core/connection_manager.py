@@ -25,6 +25,7 @@ from core.mt5_client import MT5Client, MT5UnavailableError
 
 logger = logging.getLogger("bridge")
 
+
 class ConnectionState(str, Enum):
     DISCONNECTED = "DISCONNECTED"
     INITIALIZING = "INITIALIZING"
@@ -32,6 +33,7 @@ class ConnectionState(str, Enum):
     CONNECTED = "CONNECTED"
     FAILED = "FAILED"
     SHUTTING_DOWN = "SHUTTING_DOWN"
+
 
 class ConnectionManager:
     def __init__(self):
@@ -217,6 +219,7 @@ class ConnectionManager:
                 "lastError": self._last_error,
                 "startupTime": self._startup_time,
             }
+
 
 # Module-level singleton for wiring in app
 manager = ConnectionManager()
