@@ -6,13 +6,15 @@ This module centralizes all direct imports and calls to the MetaTrader5
 library so the rest of the codebase can be tested/mocked without importing
 the real MT5 package.
 """
-from typing import Any, Optional, Dict, Tuple
+from typing import Any, Optional, Dict
 import logging
 
 logger = logging.getLogger("bridge")
 
+
 class MT5UnavailableError(RuntimeError):
     pass
+
 
 class MT5Client:
     def __init__(self):
@@ -39,11 +41,10 @@ class MT5Client:
         self._ensure_imported()
         try:
             if path:
-                # Some mt5 versions accept path kwarg, others accept nothing.
+                # Some mt5 versions accept path positional arg, others accept named arg.
                 try:
                     result = self._mt5.initialize(path)
                 except TypeError:
-                    # try named arg
                     result = self._mt5.initialize(path=path)
             else:
                 result = self._mt5.initialize()
@@ -56,7 +57,7 @@ class MT5Client:
 
     def login(self, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None) -> bool:
         """
-        Attempt to login. If login/password/server are None, assume the terminal
+        Attempt to login. If login/password are None, assume the terminal
         is already connected (returns True).
         """
         self._ensure_imported()
@@ -73,7 +74,6 @@ class MT5Client:
             return True
 
         try:
-            # mt5.login may return True/False or a tuple/dict depending on build.
             if login is not None and password is not None and server:
                 result = self._mt5.login(login, password, server)
             elif login is not None and password is not None:
@@ -86,10 +86,9 @@ class MT5Client:
             if isinstance(result, bool):
                 return result
             if isinstance(result, (tuple, list)):
-                # Some builds return (True, 0) or similar
                 return bool(result[0]) if result else False
             if isinstance(result, dict):
-                # Some builds return dict-like status
+                # Some builds return dict-like status; treat retcode==0 as success
                 return bool(result.get("retcode", 0) == 0)
             return bool(result)
         except Exception as exc:
@@ -108,7 +107,6 @@ class MT5Client:
             return bool(result) if result is not None else True
         except Exception as exc:
             logger.debug("mt5.shutdown() raised: %s", exc)
-            # Even if shutdown fails, mark as not initialized to avoid reuse.
             self._initialized = False
             return False
 
