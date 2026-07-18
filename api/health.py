@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 router = APIRouter()
 
+
 @router.get("/health", response_model=models.BridgeResponse)
 async def health():
     cm_health = connection_manager.get_health()
@@ -14,8 +15,20 @@ async def health():
     terminal_version = cm_health.get("terminalVersion")
     last_error = cm_health.get("lastError")
 
-    # Bridge is READY when connection is CONNECTED; otherwise report FAILED but still include data
-    bridge_status = "READY" if connection_state == "CONNECTED" else "FAILED" if connection_state == "FAILED" else "READY"
+    # Capability model from connection manager
+    caps = connection_manager.get_capabilities()
+
+    # Determine bridgeStatus with finer granularity
+    if caps.get("platform") and not caps.get("mt5Supported", False):
+        bridge_status = "UNSUPPORTED_PLATFORM"
+    elif not caps.get("mt5Available", False):
+        bridge_status = "BACKEND_UNAVAILABLE"
+    elif connection_state == "CONNECTED":
+        bridge_status = "READY"
+    elif connection_state in ("FAILED",):
+        bridge_status = "FAILED"
+    else:
+        bridge_status = "INITIALIZING"
 
     data = {
         "bridgeStatus": bridge_status,
@@ -23,21 +36,20 @@ async def health():
         "mt5Initialized": mt5_initialized,
         "terminalVersion": terminal_version,
         "lastError": last_error,
+        "capabilities": caps,
     }
+
+    success = connection_state == "CONNECTED"
 
     envelope = {
-        "success": connection_state == "CONNECTED",
+        "success": success,
         "requestId": None,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "data": data if connection_state == "CONNECTED" else None,
-        "error": None if connection_state == "CONNECTED" else {
+        "data": data if success else data,
+        "error": None if success else {
             "code": "CONNECTION_NOT_READY",
-            "message": "MT5 connection is not ready. See lastError for details."
+            "message": "MT5 connection is not ready. See lastError and capabilities for details."
         }
     }
-
-    # When not connected, still include the data block per mission but mark success false
-    if connection_state != "CONNECTED":
-        envelope["data"] = data
 
     return envelope
