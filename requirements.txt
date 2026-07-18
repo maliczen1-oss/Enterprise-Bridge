@@ -21,5 +21,5 @@ httpx>=0.27.0,<0.28.0
 pytest>=8.3.0,<9.0.0
 pytest-asyncio>=0.24.0,<0.25.0
 
-# MetaTrader5 terminal Python bindings
-MetaTrader5>=5.0.37
+# MetaTrader5 terminal Python bindings (Windows-only package; skipped on Linux builders)
+MetaTrader5>=5.0.37; sys_platform == "win32"
