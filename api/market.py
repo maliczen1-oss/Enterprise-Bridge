@@ -1,40 +1,52 @@
-"""
-Market data router.
+# api/market.py
+from fastapi import APIRouter, Path
+from datetime import datetime, timezone
+import logging
 
-All endpoints return HTTP 501 in Phase 2.1.  Live market data retrieval is
-implemented in Phase 2.2.
-"""
+from core import models
+from services import market_service
 
-from __future__ import annotations
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import not_implemented_response
-
-router = APIRouter(prefix="/market", tags=["Market"])
+router = APIRouter()
+logger = logging.getLogger("bridge")
 
 
-@router.get(
-    "/{symbol}/tick",
-    summary="Retrieve latest tick for a symbol",
-    description="Returns the most recent bid/ask tick for a trading symbol. Implemented in Phase 2.2.",
-)
-async def get_tick(symbol: str, request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
+@router.get("/market/{symbol}", response_model=models.BridgeResponse)
+async def market(symbol: str = Path(..., description="Symbol to query")):
+    start = datetime.now(timezone.utc)
+    logger.info("GET /market/%s called", symbol)
+    try:
+        data = market_service.get_market(symbol)
+        if data is None:
+            envelope = {
+                "success": False,
+                "requestId": None,
+                "timestamp": start.isoformat(),
+                "data": None,
+                "error": {
+                    "code": "MARKET_UNAVAILABLE",
+                    "message": f"Market data for symbol '{symbol}' is not available."
+                }
+            }
+            return envelope
 
-
-@router.get(
-    "/{symbol}/rates",
-    summary="Retrieve historical OHLCV rates",
-    description="Returns OHLCV candlestick data for a symbol and timeframe. Implemented in Phase 2.2.",
-)
-async def get_rates(symbol: str, request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
+        envelope = {
+            "success": True,
+            "requestId": None,
+            "timestamp": start.isoformat(),
+            "data": data,
+            "error": None
+        }
+        return envelope
+    except Exception as exc:
+        logger.error("Error in market endpoint for %s: %s", symbol, exc)
+        envelope = {
+            "success": False,
+            "requestId": None,
+            "timestamp": start.isoformat(),
+            "data": None,
+            "error": {
+                "code": "MARKET_ERROR",
+                "message": "Unable to fetch market data."
+            }
+        }
+        return envelope
