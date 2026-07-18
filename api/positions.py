@@ -1,40 +1,40 @@
-"""
-Positions router.
+# api/positions.py
+from fastapi import APIRouter
+from datetime import datetime, timezone
+import logging
 
-All endpoints return HTTP 501 in Phase 2.1.  Open position retrieval is
-implemented in Phase 2.2.
-"""
+from core import models
+from services import position_service
 
-from __future__ import annotations
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import not_implemented_response
-
-router = APIRouter(prefix="/positions", tags=["Positions"])
+router = APIRouter()
+logger = logging.getLogger("bridge")
 
 
-@router.get(
-    "",
-    summary="List open positions",
-    description="Returns all currently open positions. Implemented in Phase 2.2.",
-)
-async def list_positions(request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
-
-
-@router.get(
-    "/{ticket}",
-    summary="Retrieve a position by ticket",
-    description="Returns a single open position by its broker ticket number. Implemented in Phase 2.2.",
-)
-async def get_position(ticket: int, request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
+@router.get("/positions", response_model=models.BridgeResponse)
+async def positions():
+    start = datetime.now(timezone.utc)
+    logger.info("GET /positions called")
+    try:
+        data = position_service.get_positions()
+        success = True
+        envelope = {
+            "success": success,
+            "requestId": None,
+            "timestamp": start.isoformat(),
+            "data": data,
+            "error": None
+        }
+        return envelope
+    except Exception as exc:
+        logger.error("Error in positions endpoint: %s", exc)
+        envelope = {
+            "success": False,
+            "requestId": None,
+            "timestamp": start.isoformat(),
+            "data": None,
+            "error": {
+                "code": "POSITIONS_ERROR",
+                "message": "Unable to fetch positions."
+            }
+        }
+        return envelope
