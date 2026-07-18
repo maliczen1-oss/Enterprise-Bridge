@@ -1,67 +1,36 @@
-"""
-PositionService — open position operations.
-
-Phase 2.1: Interface definition only.
-"""
-
-from __future__ import annotations
-
+# services/account_service.py
+from typing import Optional, Dict, Any
 import logging
-from typing import Any
 
-logger = logging.getLogger(__name__)
+from core.connection_manager import manager as connection_manager
+
+logger = logging.getLogger("bridge")
 
 
-class PositionService:
+def get_account() -> Optional[Dict[str, Any]]:
     """
-    Provides access to open broker positions.
-
-    Responsibilities
-    ----------------
-    - Retrieve all open positions.
-    - Retrieve a single position by broker ticket number.
-
-    Out of scope (Phase 2.2+)
-    -------------------------
-    - Modifying or closing positions (delegated to TradeService).
-    - Error recovery and retry logic.
+    Return account metadata and balances. Returns None if unavailable.
     """
+    start = logger and None
+    logger.info("Account request")
+    info = connection_manager.fetch_account()
+    if not info:
+        logger.info("Account data unavailable")
+        return None
 
-    async def get_all_positions(self) -> list[dict[str, Any]]:
-        """
-        Return all currently open positions.
-
-        Returns
-        -------
-        list[dict]
-            One dict per position with standard position fields.
-
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug("PositionService.get_all_positions called.")
-        raise NotImplementedError("PositionService.get_all_positions: Phase 2.2.")
-
-    async def get_position_by_ticket(self, ticket: int) -> dict[str, Any]:
-        """
-        Return a single open position by its broker ticket number.
-
-        Parameters
-        ----------
-        ticket:
-            The broker-assigned unique ticket number for the position.
-
-        Returns
-        -------
-        dict
-            Position fields for the requested ticket.
-
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug("PositionService.get_position_by_ticket called.", extra={"ticket": ticket})
-        raise NotImplementedError("PositionService.get_position_by_ticket: Phase 2.2.")
+    # Map fields to the requested output shape. MT5 account_info fields vary by build.
+    account = {
+        "account": info.get("login") or info.get("login_id") or info.get("account"),
+        "server": info.get("server"),
+        "broker": info.get("company"),
+        "balance": info.get("balance"),
+        "equity": info.get("equity"),
+        "margin": info.get("margin"),
+        "free_margin": info.get("margin_free") or info.get("free_margin"),
+        "margin_level": info.get("margin_level"),
+        "currency": info.get("currency"),
+        "leverage": info.get("leverage"),
+        "company": info.get("company"),
+        "account_name": info.get("name") or info.get("login_name"),
+    }
+    return account
