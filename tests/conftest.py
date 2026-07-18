@@ -2,24 +2,23 @@
 import pytest
 import datetime
 from types import SimpleNamespace
-from typing import Any, Dict, List
-
+from typing import Any, Dict, List, Optional
 import logging
 
-from core import connection_manager as cm_module
+import core.connection_manager as cm_module
 from config import settings
 
-logger = logging.getLogger("bridge")
+# Silence bridge logger during tests unless a test explicitly asserts logs
+logging.getLogger("bridge").setLevel(logging.CRITICAL)
 
 
 @pytest.fixture(autouse=True)
-def patch_logger_level():
+def ensure_test_auth_token(monkeypatch):
     """
-    Ensure tests produce minimal noise; tests can still assert logs if needed.
+    Ensure a stable AUTH_TOKEN for tests so they don't depend on environment.
     """
-    logging.getLogger("bridge").setLevel(logging.CRITICAL)
+    monkeypatch.setattr(settings, "AUTH_TOKEN", "test-token", raising=False)
     yield
-    logging.getLogger("bridge").setLevel(logging.INFO)
 
 
 @pytest.fixture
@@ -125,14 +124,21 @@ def sample_deals_and_orders() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def mock_manager(monkeypatch, sample_account, sample_positions, sample_symbols, sample_tick, sample_symbol_info, sample_deals_and_orders):
+def mock_manager_connected(
+    monkeypatch,
+    sample_account,
+    sample_positions,
+    sample_symbols,
+    sample_tick,
+    sample_symbol_info,
+    sample_deals_and_orders,
+):
     """
-    Replace the module-level manager singleton with a SimpleNamespace that exposes
-    the read-only fetch methods used by services and APIs.
+    Provide a fake manager in CONNECTED state. Services and APIs should use this.
     """
     fake = SimpleNamespace()
 
-    # Lifecycle/state helpers
+    # Health and state
     fake.get_health = lambda: {
         "connectionState": "CONNECTED",
         "mt5Initialized": True,
@@ -150,19 +156,43 @@ def mock_manager(monkeypatch, sample_account, sample_positions, sample_symbols, 
     fake.fetch_symbol_info = lambda symbol: sample_symbol_info if symbol == "EURUSD" else None
     fake.fetch_symbol_tick = lambda symbol: sample_tick if symbol == "EURUSD" else None
 
-    def _from_to(dt_from, dt_to, ticket=None, symbol=None):
-        # Return deals/orders from fixture regardless of filters for simplicity
+    def _deals(from_dt, to_dt, ticket=None, symbol=None):
         return sample_deals_and_orders["deals"]
 
-    def _orders(dt_from, dt_to, ticket=None, symbol=None):
+    def _orders(from_dt, to_dt, ticket=None, symbol=None):
         return sample_deals_and_orders["orders"]
 
-    fake.fetch_history_deals = _from_to
+    fake.fetch_history_deals = _deals
     fake.fetch_history_orders = _orders
 
-    # Monkeypatch the module-level manager object in core.connection_manager
     monkeypatch.setattr(cm_module, "manager", fake)
-    # Also patch any direct imports of the manager (services import manager from core.connection_manager)
-    # Many modules import `from core.connection_manager import manager as connection_manager`
-    # So patch that name in the connection_manager module's namespace is sufficient because services reference it.
+    yield fake
+
+
+@pytest.fixture
+def mock_manager_disconnected(monkeypatch):
+    """
+    Provide a fake manager in DISCONNECTED/FAILED state to test error paths.
+    """
+    fake = SimpleNamespace()
+    fake.get_health = lambda: {
+        "connectionState": "FAILED",
+        "mt5Initialized": False,
+        "terminalVersion": None,
+        "lastError": {"code": "MT5_IMPORT_FAILED", "message": "MetaTrader5 not installed"},
+        "startupTime": None,
+    }
+    fake.get_state = lambda: "FAILED"
+    fake.is_connected = lambda: False
+
+    # Read-only proxies return None / empty lists
+    fake.fetch_account = lambda: None
+    fake.fetch_positions = lambda: []
+    fake.fetch_symbols = lambda: []
+    fake.fetch_symbol_info = lambda symbol: None
+    fake.fetch_symbol_tick = lambda symbol: None
+    fake.fetch_history_deals = lambda *a, **k: []
+    fake.fetch_history_orders = lambda *a, **k: []
+
+    monkeypatch.setattr(cm_module, "manager", fake)
     yield fake
