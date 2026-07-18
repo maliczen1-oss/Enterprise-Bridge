@@ -2,46 +2,80 @@
 """
 Thin wrapper around the MetaTrader5 Python bindings.
 
-This module centralizes all direct imports and calls to the MetaTrader5
-library so the rest of the codebase can be tested/mocked without importing
-the real MT5 package.
+This module makes MetaTrader5 optional. Import errors do not prevent the
+application from starting. The module exposes a capability model describing
+the runtime environment and whether MT5 is available/supported.
 
-All methods return Python-native structures (dicts, lists, primitives) or
-None on failure. They never raise MetaTrader5-specific exceptions to callers;
-errors are logged and None/empty lists are returned so the ConnectionManager
-can translate them into bridge-level errors.
+All MT5-specific calls are centralized here. Callers should check
+MT5_AVAILABLE and/or use ConnectionManager which wraps this client and
+exposes higher-level runtime states.
 """
-from typing import Any, Optional, Dict, List
+from typing import Any, Dict, List, Optional
 import logging
+import platform
 import datetime
 
 logger = logging.getLogger("bridge")
 
+# Attempt to import MetaTrader5 but do not raise on ImportError.
+try:
+    import MetaTrader5 as mt5  # type: ignore
+    MT5_AVAILABLE = True
+except ImportError:
+    mt5 = None  # type: ignore
+    MT5_AVAILABLE = False
+
+# Determine platform capability: MetaTrader5 official Python package is
+# supported on Windows. On Linux/macOS the package may be unavailable.
+PLATFORM = platform.system().lower()
+
+
+def get_capabilities() -> Dict[str, Any]:
+    """
+    Return a capability model describing the runtime environment and MT5
+    availability/support status.
+    Example:
+    {
+      "platform": "linux",
+      "mt5Supported": False,
+      "mt5Available": False,
+      "backend": "disabled"
+    }
+    """
+    mt5_supported = PLATFORM == "windows"
+    mt5_available = MT5_AVAILABLE and mt5 is not None and mt5_supported
+    backend = "enabled" if mt5_available else "disabled"
+    return {
+        "platform": PLATFORM,
+        "mt5Supported": mt5_supported,
+        "mt5Available": mt5_available,
+        "backend": backend,
+    }
+
 
 class MT5UnavailableError(RuntimeError):
-    """Raised when the MetaTrader5 package cannot be imported."""
+    """Raised when MT5 is not available on this platform."""
 
 
 class MT5Client:
-    def __init__(self):
-        self._mt5 = None
-        self._initialized = False
-        self._loaded = False
+    """
+    Wrapper around MetaTrader5. Callers must check MT5_AVAILABLE or use
+    get_capabilities() before invoking methods.
+    """
 
-    def _ensure_imported(self) -> None:
-        if self._loaded:
-            return
-        try:
-            import MetaTrader5 as mt5  # type: ignore
-        except Exception as exc:
-            logger.debug("MetaTrader5 import failed: %s", exc)
-            raise MT5UnavailableError(f"MetaTrader5 import failed: {exc}") from exc
-        self._mt5 = mt5
-        self._loaded = True
+    def __init__(self):
+        self._mt5 = mt5 if MT5_AVAILABLE else None
+        self._initialized = False
 
     # Lifecycle -----------------------------------------------------------
     def initialize(self, path: Optional[str] = None) -> bool:
-        self._ensure_imported()
+        """
+        Initialize the MT5 terminal. Returns True on success, False otherwise.
+        If MT5 is not available on this platform, returns False.
+        """
+        if not MT5_AVAILABLE:
+            logger.debug("MT5 initialize called but MT5 is not available on this platform.")
+            return False
         try:
             if path:
                 try:
@@ -58,7 +92,14 @@ class MT5Client:
             return False
 
     def login(self, login: Optional[int] = None, password: Optional[str] = None, server: Optional[str] = None) -> bool:
-        self._ensure_imported()
+        """
+        Attempt to login. If MT5 is not available, return False.
+        If login/password are None, assume the terminal is already connected.
+        """
+        if not MT5_AVAILABLE:
+            logger.debug("MT5 login called but MT5 is not available on this platform.")
+            return False
+
         if not self._initialized:
             try:
                 self._mt5.initialize()
@@ -89,7 +130,11 @@ class MT5Client:
             return False
 
     def shutdown(self) -> bool:
-        if not self._loaded or not self._mt5:
+        """
+        Shutdown the MT5 terminal connection. Returns True on success.
+        If MT5 is not available, return True (nothing to do).
+        """
+        if not MT5_AVAILABLE or not self._mt5:
             return True
         try:
             result = self._mt5.shutdown()
@@ -102,17 +147,17 @@ class MT5Client:
 
     # Introspection ------------------------------------------------------
     def terminal_info(self) -> Optional[Dict[str, Any]]:
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             info = self._mt5.terminal_info()
-            return info if info else None
+            return info._asdict() if hasattr(info, "_asdict") else (dict(info) if isinstance(info, dict) else None)
         except Exception as exc:
             logger.debug("mt5.terminal_info() raised: %s", exc)
             return None
 
     def version(self) -> Optional[str]:
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             ver = self._mt5.version()
@@ -122,7 +167,7 @@ class MT5Client:
             return None
 
     def last_error(self) -> Optional[Dict[str, Any]]:
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             last = self._mt5.last_error()
@@ -133,30 +178,17 @@ class MT5Client:
 
     # Read-only data access ---------------------------------------------
     def account_info(self) -> Optional[Dict[str, Any]]:
-        """
-        Return account_info() as a dict or None.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             info = self._mt5.account_info()
-            if not info:
-                return None
-            # Convert to dict if it's a namedtuple-like object
-            try:
-                return info._asdict()  # type: ignore[attr-defined]
-            except Exception:
-                # Fallback: attempt to cast to dict
-                return dict(info) if isinstance(info, dict) else None
+            return info._asdict() if hasattr(info, "_asdict") else (dict(info) if isinstance(info, dict) else None)
         except Exception as exc:
             logger.debug("mt5.account_info() raised: %s", exc)
             return None
 
     def positions_get(self) -> List[Dict[str, Any]]:
-        """
-        Return list of positions as dicts. Empty list on no positions or error.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return []
         try:
             positions = self._mt5.positions_get()
@@ -164,20 +196,14 @@ class MT5Client:
                 return []
             out = []
             for p in positions:
-                try:
-                    out.append(p._asdict())  # type: ignore[attr-defined]
-                except Exception:
-                    out.append(dict(p) if isinstance(p, dict) else {})
+                out.append(p._asdict() if hasattr(p, "_asdict") else (dict(p) if isinstance(p, dict) else {}))
             return out
         except Exception as exc:
             logger.debug("mt5.positions_get() raised: %s", exc)
             return []
 
     def symbols_get(self) -> List[Dict[str, Any]]:
-        """
-        Return list of available symbols as dicts.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return []
         try:
             syms = self._mt5.symbols_get()
@@ -185,59 +211,36 @@ class MT5Client:
                 return []
             out = []
             for s in syms:
-                try:
-                    out.append(s._asdict())  # type: ignore[attr-defined]
-                except Exception:
-                    out.append(dict(s) if isinstance(s, dict) else {})
+                out.append(s._asdict() if hasattr(s, "_asdict") else (dict(s) if isinstance(s, dict) else {}))
             return out
         except Exception as exc:
             logger.debug("mt5.symbols_get() raised: %s", exc)
             return []
 
     def symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """
-        Return symbol_info(symbol) as dict or None.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             info = self._mt5.symbol_info(symbol)
-            if not info:
-                return None
-            try:
-                return info._asdict()  # type: ignore[attr-defined]
-            except Exception:
-                return dict(info) if isinstance(info, dict) else None
+            return info._asdict() if hasattr(info, "_asdict") else (dict(info) if isinstance(info, dict) else None)
         except Exception as exc:
             logger.debug("mt5.symbol_info(%s) raised: %s", symbol, exc)
             return None
 
     def symbol_info_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """
-        Return symbol_info_tick(symbol) as dict or None.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return None
         try:
             tick = self._mt5.symbol_info_tick(symbol)
-            if not tick:
-                return None
-            try:
-                return tick._asdict()  # type: ignore[attr-defined]
-            except Exception:
-                return dict(tick) if isinstance(tick, dict) else None
+            return tick._asdict() if hasattr(tick, "_asdict") else (dict(tick) if isinstance(tick, dict) else None)
         except Exception as exc:
             logger.debug("mt5.symbol_info_tick(%s) raised: %s", symbol, exc)
             return None
 
     def history_deals_get(self, from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Wrapper for mt5.history_deals_get. Returns list of deals as dicts.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return []
         try:
-            # mt5.history_deals_get accepts datetime objects in many builds
             if ticket is not None:
                 deals = self._mt5.history_deals_get(from_dt, to_dt, ticket)
             elif symbol:
@@ -248,20 +251,14 @@ class MT5Client:
                 return []
             out = []
             for d in deals:
-                try:
-                    out.append(d._asdict())  # type: ignore[attr-defined]
-                except Exception:
-                    out.append(dict(d) if isinstance(d, dict) else {})
+                out.append(d._asdict() if hasattr(d, "_asdict") else (dict(d) if isinstance(d, dict) else {}))
             return out
         except Exception as exc:
             logger.debug("mt5.history_deals_get() raised: %s", exc)
             return []
 
     def history_orders_get(self, from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Wrapper for mt5.history_orders_get. Returns list of orders as dicts.
-        """
-        if not self._loaded or not self._mt5:
+        if not MT5_AVAILABLE or not self._mt5:
             return []
         try:
             if ticket is not None:
@@ -274,10 +271,7 @@ class MT5Client:
                 return []
             out = []
             for o in orders:
-                try:
-                    out.append(o._asdict())  # type: ignore[attr-defined]
-                except Exception:
-                    out.append(dict(o) if isinstance(o, dict) else {})
+                out.append(o._asdict() if hasattr(o, "_asdict") else (dict(o) if isinstance(o, dict) else {}))
             return out
         except Exception as exc:
             logger.debug("mt5.history_orders_get() raised: %s", exc)
