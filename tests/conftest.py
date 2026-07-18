@@ -1,50 +1,168 @@
-"""
-pytest configuration for the WealthBuilder Bridge test suite.
-
-Bootstraps the FastAPI application state (startup_time, connection_manager)
-that is normally populated by the lifespan context manager.  The httpx
-ASGITransport does not trigger lifespan events, so we replicate the relevant
-startup logic here to keep tests self-contained.
-"""
-
-from __future__ import annotations
-
-import os
-import time
-from datetime import datetime, timezone
-
+# tests/conftest.py
 import pytest
-import pytest_asyncio
+import datetime
+from types import SimpleNamespace
+from typing import Any, Dict, List
 
-# Env vars must be in place before bridge.config is imported.
-os.environ.setdefault("ENVIRONMENT", "development")
-os.environ.setdefault("API_VERSION", "v1")
-os.environ.setdefault("AUTH_TOKEN", "test-secret-token-for-pytest")
-os.environ.setdefault("LOG_LEVEL", "WARNING")
+import logging
 
-from bridge.app import app  # noqa: E402
-from bridge.core.connection_manager import ConnectionManager  # noqa: E402
+from core import connection_manager as cm_module
+from config import settings
+
+logger = logging.getLogger("bridge")
 
 
-@pytest_asyncio.fixture(autouse=True, scope="session")
-async def bootstrap_app_state():
+@pytest.fixture(autouse=True)
+def patch_logger_level():
     """
-    Initialise ``app.state`` once for the entire test session.
-
-    Mirrors the startup sequence in ``bridge.app.lifespan`` without requiring
-    a running ASGI server or a lifespan-aware transport.
+    Ensure tests produce minimal noise; tests can still assert logs if needed.
     """
-    cm = ConnectionManager()
-    await cm.start()
-
-    app.state.connection_manager = cm
-    app.state.startup_time = datetime.now(tz=timezone.utc)
-    app.state.startup_monotonic = time.monotonic()
-
+    logging.getLogger("bridge").setLevel(logging.CRITICAL)
     yield
+    logging.getLogger("bridge").setLevel(logging.INFO)
 
-    await cm.stop()
+
+@pytest.fixture
+def sample_account() -> Dict[str, Any]:
+    return {
+        "login": 123456,
+        "server": "DemoServer",
+        "company": "DemoBroker",
+        "balance": 10000.0,
+        "equity": 10050.0,
+        "margin": 100.0,
+        "margin_free": 9950.0,
+        "margin_level": 10050.0,
+        "currency": "USD",
+        "leverage": 100,
+        "name": "Demo Account",
+    }
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "asyncio: mark test as async")
+@pytest.fixture
+def sample_positions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "ticket": 1,
+            "symbol": "EURUSD",
+            "type": 0,
+            "volume": 0.1,
+            "price_open": 1.1000,
+            "price_current": 1.1010,
+            "profit": 10.0,
+            "swap": 0.0,
+            "commission": 0.0,
+            "sl": 1.0900,
+            "tp": 1.1200,
+            "time": 1620000000,
+            "magic": 42,
+            "comment": "test",
+        }
+    ]
+
+
+@pytest.fixture
+def sample_symbols() -> List[Dict[str, Any]]:
+    return [
+        {
+            "name": "EURUSD",
+            "visible": True,
+            "trade_mode": "FOREX",
+            "digits": 5,
+            "point": 0.00001,
+            "spread": 1.2,
+            "contract_size": 100000,
+            "currency": "USD",
+        }
+    ]
+
+
+@pytest.fixture
+def sample_tick() -> Dict[str, Any]:
+    return {
+        "bid": 1.1010,
+        "ask": 1.1012,
+        "time": 1620000000,
+        "volume": 1000,
+    }
+
+
+@pytest.fixture
+def sample_symbol_info() -> Dict[str, Any]:
+    return {
+        "digits": 5,
+        "point": 0.00001,
+        "high": 1.1050,
+        "low": 1.0950,
+    }
+
+
+@pytest.fixture
+def sample_deals_and_orders() -> Dict[str, Any]:
+    deals = [
+        {
+            "ticket": 1001,
+            "symbol": "EURUSD",
+            "profit": 5.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "comment": "deal1",
+            "time": 1620001000,
+        }
+    ]
+    orders = [
+        {
+            "ticket": 2001,
+            "symbol": "EURUSD",
+            "profit": 0.0,
+            "commission": 0.0,
+            "swap": 0.0,
+            "comment": "order1",
+            "time": 1620002000,
+        }
+    ]
+    return {"deals": deals, "orders": orders}
+
+
+@pytest.fixture
+def mock_manager(monkeypatch, sample_account, sample_positions, sample_symbols, sample_tick, sample_symbol_info, sample_deals_and_orders):
+    """
+    Replace the module-level manager singleton with a SimpleNamespace that exposes
+    the read-only fetch methods used by services and APIs.
+    """
+    fake = SimpleNamespace()
+
+    # Lifecycle/state helpers
+    fake.get_health = lambda: {
+        "connectionState": "CONNECTED",
+        "mt5Initialized": True,
+        "terminalVersion": "5.0.37",
+        "lastError": None,
+        "startupTime": 0.0,
+    }
+    fake.get_state = lambda: "CONNECTED"
+    fake.is_connected = lambda: True
+
+    # Read-only proxies
+    fake.fetch_account = lambda: sample_account
+    fake.fetch_positions = lambda: sample_positions
+    fake.fetch_symbols = lambda: sample_symbols
+    fake.fetch_symbol_info = lambda symbol: sample_symbol_info if symbol == "EURUSD" else None
+    fake.fetch_symbol_tick = lambda symbol: sample_tick if symbol == "EURUSD" else None
+
+    def _from_to(dt_from, dt_to, ticket=None, symbol=None):
+        # Return deals/orders from fixture regardless of filters for simplicity
+        return sample_deals_and_orders["deals"]
+
+    def _orders(dt_from, dt_to, ticket=None, symbol=None):
+        return sample_deals_and_orders["orders"]
+
+    fake.fetch_history_deals = _from_to
+    fake.fetch_history_orders = _orders
+
+    # Monkeypatch the module-level manager object in core.connection_manager
+    monkeypatch.setattr(cm_module, "manager", fake)
+    # Also patch any direct imports of the manager (services import manager from core.connection_manager)
+    # Many modules import `from core.connection_manager import manager as connection_manager`
+    # So patch that name in the connection_manager module's namespace is sufficient because services reference it.
+    yield fake
