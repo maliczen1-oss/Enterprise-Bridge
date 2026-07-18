@@ -1,52 +1,32 @@
-"""
-Account router.
+# api/account.py
+from fastapi import APIRouter, Depends
+from datetime import datetime, timezone
+import logging
 
-All endpoints return HTTP 501 in Phase 2.1.  Broker account retrieval is
-implemented in Phase 2.2.
-"""
+from core import models
+from services import account_service
+from core.connection_manager import manager as connection_manager
 
-from __future__ import annotations
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import not_implemented_response
-
-router = APIRouter(prefix="/account", tags=["Account"])
+router = APIRouter()
+logger = logging.getLogger("bridge")
 
 
-@router.get(
-    "",
-    summary="Retrieve account information",
-    description="Returns broker account details. Implemented in Phase 2.2.",
-)
-async def get_account(request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
-
-
-@router.get(
-    "/balance",
-    summary="Retrieve account balance",
-    description="Returns the current account balance and equity. Implemented in Phase 2.2.",
-)
-async def get_balance(request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
-
-
-@router.get(
-    "/margin",
-    summary="Retrieve margin information",
-    description="Returns used margin, free margin, and margin level. Implemented in Phase 2.2.",
-)
-async def get_margin(request: Request) -> JSONResponse:
-    return JSONResponse(
-        status_code=501,
-        content=not_implemented_response(request_id=get_request_id()),
-    )
+@router.get("/account", response_model=models.BridgeResponse)
+async def account():
+    start = time_now = datetime.now(timezone.utc)
+    logger.info("GET /account called")
+    data = account_service.get_account()
+    success = data is not None
+    envelope = {
+        "success": success,
+        "requestId": None,
+        "timestamp": time_now.isoformat(),
+        "data": data if success else None,
+        "error": None if success else {
+            "code": "ACCOUNT_UNAVAILABLE",
+            "message": "Account information is not available. See health for connection details."
+        }
+    }
+    if not success:
+        envelope["data"] = None
+    return envelope
