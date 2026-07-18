@@ -1,67 +1,29 @@
-"""
-SymbolService — trading symbol catalogue operations.
-
-Phase 2.1: Interface definition only.
-"""
-
-from __future__ import annotations
-
+# services/symbol_service.py
+from typing import List, Dict, Any
 import logging
-from typing import Any
 
-logger = logging.getLogger(__name__)
+from core.connection_manager import manager as connection_manager
+
+logger = logging.getLogger("bridge")
 
 
-class SymbolService:
+def get_symbols() -> List[Dict[str, Any]]:
     """
-    Provides the broker trading symbol catalogue.
-
-    Responsibilities
-    ----------------
-    - Retrieve all symbols available on the broker.
-    - Retrieve the full specification for a single named symbol.
-
-    Out of scope (Phase 2.2+)
-    -------------------------
-    - Symbol subscription management.
-    - Error recovery and retry logic.
+    Return available symbols with requested attributes.
     """
-
-    async def get_all_symbols(self) -> list[dict[str, Any]]:
-        """
-        Return all symbols available on the connected broker.
-
-        Returns
-        -------
-        list[dict]
-            One dict per symbol with name, description, and classification fields.
-
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug("SymbolService.get_all_symbols called.")
-        raise NotImplementedError("SymbolService.get_all_symbols: Phase 2.2.")
-
-    async def get_symbol_info(self, symbol: str) -> dict[str, Any]:
-        """
-        Return the full specification for a named trading symbol.
-
-        Parameters
-        ----------
-        symbol:
-            The broker symbol name (e.g. ``"EURUSD"``).
-
-        Returns
-        -------
-        dict
-            Symbol specification fields: digits, contract size, margin requirements, etc.
-
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug("SymbolService.get_symbol_info called.", extra={"symbol": symbol})
-        raise NotImplementedError("SymbolService.get_symbol_info: Phase 2.2.")
+    logger.info("Symbol request")
+    raw = connection_manager.fetch_symbols()
+    out: List[Dict[str, Any]] = []
+    for s in raw:
+        sym = {
+            "name": s.get("name") or s.get("symbol"),
+            "visible": s.get("visible"),
+            "trade_mode": s.get("trade_mode") or s.get("trade"),
+            "digits": s.get("digits"),
+            "point": s.get("point"),
+            "spread": s.get("spread"),
+            "contract_size": s.get("contract_size") or s.get("lot_size"),
+            "currency": s.get("currency_base") or s.get("currency"),
+        }
+        out.append(sym)
+    return out
