@@ -4,25 +4,9 @@ Connection manager that uses core.mt5_client.MT5Client to manage the
 MetaTrader5 terminal lifecycle and provide read-only data proxies for
 services.
 
-Public interface (selected):
-    start()
-    stop()
-    restart()
-    is_connected()
-    get_state()
-    get_terminal_info()
-    get_version()
-    get_last_error()
-    get_health()
-
-Read-only proxies:
-    fetch_account()
-    fetch_positions()
-    fetch_symbols()
-    fetch_symbol_info(symbol)
-    fetch_symbol_tick(symbol)
-    fetch_history_deals(from_dt, to_dt, ticket=None, symbol=None)
-    fetch_history_orders(from_dt, to_dt, ticket=None, symbol=None)
+This version treats MT5 as optional and exposes capability information.
+When MT5 is not supported on the platform, the manager enters
+UNSUPPORTED_PLATFORM state and will not attempt initialization.
 """
 import threading
 import time
@@ -32,7 +16,7 @@ from typing import Optional, Dict, Any, List
 import datetime
 
 from config import settings
-from core.mt5_client import MT5Client, MT5UnavailableError
+from core import mt5_client
 
 logger = logging.getLogger("bridge")
 
@@ -44,18 +28,30 @@ class ConnectionState(str, Enum):
     CONNECTED = "CONNECTED"
     FAILED = "FAILED"
     SHUTTING_DOWN = "SHUTTING_DOWN"
+    UNSUPPORTED_PLATFORM = "UNSUPPORTED_PLATFORM"
+    BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
 
 
 class ConnectionManager:
     def __init__(self):
         self._lock = threading.RLock()
         self._state: ConnectionState = ConnectionState.DISCONNECTED
-        self._client = MT5Client()
+        self._client = mt5_client.MT5Client()
         self._mt5_initialized: bool = False
         self._terminal_info: Optional[Dict[str, Any]] = None
         self._version: Optional[str] = None
         self._last_error: Optional[Dict[str, Any]] = None
         self._startup_time: Optional[float] = None
+        self._capabilities = mt5_client.get_capabilities()
+
+        # If platform does not support MT5, mark as UNSUPPORTED_PLATFORM
+        if not self._capabilities.get("mt5Supported", False):
+            self._state = ConnectionState.UNSUPPORTED_PLATFORM
+            logger.info("Platform does not support MT5; state -> %s", self._state.value)
+        elif not self._capabilities.get("mt5Available", False):
+            # Platform supports MT5 but package not available (e.g., not installed)
+            self._state = ConnectionState.BACKEND_UNAVAILABLE
+            logger.info("MT5 package not available; state -> %s", self._state.value)
 
     # Internal helpers -------------------------------------------------
     def _set_state(self, new_state: ConnectionState):
@@ -69,12 +65,14 @@ class ConnectionManager:
 
     def _is_legal_transition(self, prev: ConnectionState, new: ConnectionState) -> bool:
         allowed = {
-            ConnectionState.DISCONNECTED: {ConnectionState.INITIALIZING, ConnectionState.SHUTTING_DOWN},
+            ConnectionState.DISCONNECTED: {ConnectionState.INITIALIZING, ConnectionState.SHUTTING_DOWN, ConnectionState.UNSUPPORTED_PLATFORM, ConnectionState.BACKEND_UNAVAILABLE},
             ConnectionState.INITIALIZING: {ConnectionState.CONNECTING, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN},
             ConnectionState.CONNECTING: {ConnectionState.CONNECTED, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN},
             ConnectionState.CONNECTED: {ConnectionState.SHUTTING_DOWN, ConnectionState.DISCONNECTED, ConnectionState.FAILED},
             ConnectionState.FAILED: {ConnectionState.INITIALIZING, ConnectionState.SHUTTING_DOWN, ConnectionState.DISCONNECTED},
             ConnectionState.SHUTTING_DOWN: {ConnectionState.DISCONNECTED},
+            ConnectionState.UNSUPPORTED_PLATFORM: {ConnectionState.DISCONNECTED},
+            ConnectionState.BACKEND_UNAVAILABLE: {ConnectionState.INITIALIZING, ConnectionState.DISCONNECTED},
         }
         return new in allowed.get(prev, set())
 
@@ -85,6 +83,14 @@ class ConnectionManager:
     # Public API - lifecycle ------------------------------------------
     def start(self):
         with self._lock:
+            # If platform unsupported or backend unavailable, do not attempt init
+            if self._state == ConnectionState.UNSUPPORTED_PLATFORM:
+                logger.info("Start called but platform does not support MT5")
+                return
+            if self._state == ConnectionState.BACKEND_UNAVAILABLE:
+                logger.info("Start called but MT5 backend not available (package missing)")
+                return
+
             if self._state in (ConnectionState.CONNECTED, ConnectionState.CONNECTING, ConnectionState.INITIALIZING):
                 logger.info("Start called but connection manager already in state %s", self._state.value)
                 return
@@ -94,15 +100,8 @@ class ConnectionManager:
 
             logger.info("Initializing MT5")
             try:
-                try:
-                    path = settings.MT5_TERMINAL_PATH or None
-                    initialized = self._client.initialize(path=path)
-                except MT5UnavailableError as exc:
-                    self._mt5_initialized = False
-                    self._record_error("MT5_IMPORT_FAILED", str(exc))
-                    self._set_state(ConnectionState.FAILED)
-                    return
-
+                path = settings.MT5_TERMINAL_PATH or None
+                initialized = self._client.initialize(path=path)
                 if not initialized:
                     last = self._client.last_error()
                     msg = "mt5.initialize() returned False"
@@ -115,7 +114,6 @@ class ConnectionManager:
 
                 self._mt5_initialized = True
                 logger.info("MT5 initialized")
-
             except Exception as exc:
                 self._mt5_initialized = False
                 self._record_error("MT5_INITIALIZE_EXCEPTION", str(exc))
@@ -158,7 +156,6 @@ class ConnectionManager:
                 self._startup_time = time.time()
                 self._set_state(ConnectionState.CONNECTED)
                 logger.info("Connected")
-
             except Exception as exc:
                 self._record_error("MT5_CONNECTION_EXCEPTION", str(exc))
                 self._set_state(ConnectionState.FAILED)
@@ -166,8 +163,8 @@ class ConnectionManager:
 
     def stop(self):
         with self._lock:
-            if self._state == ConnectionState.DISCONNECTED:
-                logger.info("Stop called but already disconnected")
+            if self._state in (ConnectionState.DISCONNECTED, ConnectionState.UNSUPPORTED_PLATFORM, ConnectionState.BACKEND_UNAVAILABLE):
+                logger.info("Stop called but already disconnected or backend unsupported")
                 return
 
             logger.info("Shutdown")
@@ -215,6 +212,20 @@ class ConnectionManager:
         with self._lock:
             return self._last_error
 
+    def get_capabilities(self) -> Dict[str, Any]:
+        """
+        Return the capability model from mt5_client plus runtime flags.
+        """
+        with self._lock:
+            caps = dict(self._capabilities)
+            caps.update({
+                "state": self._state.value,
+                "mt5Initialized": bool(self._mt5_initialized),
+                "terminalVersion": self._version,
+                "lastError": self._last_error,
+            })
+            return caps
+
     def get_health(self) -> Dict[str, Any]:
         with self._lock:
             return {
@@ -227,10 +238,6 @@ class ConnectionManager:
 
     # Read-only proxies for services -----------------------------------
     def _ensure_ready_for_reads(self) -> bool:
-        """
-        Return True if the manager is in a state where read-only MT5 calls
-        are expected to succeed. Otherwise record an error and return False.
-        """
         with self._lock:
             if self._state != ConnectionState.CONNECTED or not self._mt5_initialized:
                 self._record_error("BRIDGE_NOT_CONNECTED", "Bridge is not connected to MT5")
@@ -238,9 +245,6 @@ class ConnectionManager:
             return True
 
     def fetch_account(self) -> Optional[Dict[str, Any]]:
-        """
-        Return account info dict or None.
-        """
         if not self._ensure_ready_for_reads():
             return None
         try:
@@ -250,9 +254,6 @@ class ConnectionManager:
             return None
 
     def fetch_positions(self) -> List[Dict[str, Any]]:
-        """
-        Return list of positions (possibly empty).
-        """
         if not self._ensure_ready_for_reads():
             return []
         try:
@@ -262,9 +263,6 @@ class ConnectionManager:
             return []
 
     def fetch_symbols(self) -> List[Dict[str, Any]]:
-        """
-        Return list of symbols (possibly empty).
-        """
         if not self._ensure_ready_for_reads():
             return []
         try:
