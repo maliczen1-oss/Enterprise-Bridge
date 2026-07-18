@@ -1,94 +1,53 @@
-"""
-HistoryService — historical deal and order retrieval.
-
-Phase 2.1: Interface definition only.
-"""
-
-from __future__ import annotations
-
+# services/history_service.py
+from typing import List, Dict, Any, Optional
 import logging
-from datetime import datetime
-from typing import Any
+import datetime
 
-logger = logging.getLogger(__name__)
+from core.connection_manager import manager as connection_manager
+
+logger = logging.getLogger("bridge")
 
 
-class HistoryService:
+def get_history(from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
     """
-    Provides access to broker trading history.
-
-    Responsibilities
-    ----------------
-    - Retrieve closed deals within a date range.
-    - Retrieve filled and cancelled orders within a date range.
-
-    Out of scope (Phase 2.2+)
-    -------------------------
-    - Broker connection management.
-    - Error recovery and retry logic.
+    Return history (deals and orders) within the date range. Limit is applied after retrieval.
     """
+    logger.info("History request from=%s to=%s ticket=%s symbol=%s limit=%s", from_dt.isoformat(), to_dt.isoformat(), ticket, symbol, limit)
+    deals = connection_manager.fetch_history_deals(from_dt, to_dt, ticket=ticket, symbol=symbol)
+    orders = connection_manager.fetch_history_orders(from_dt, to_dt, ticket=ticket, symbol=symbol)
 
-    async def get_deals(
-        self,
-        date_from: datetime,
-        date_to: datetime,
-    ) -> list[dict[str, Any]]:
-        """
-        Return all closed deals between ``date_from`` and ``date_to``.
+    # Apply limit if provided
+    if limit is not None and isinstance(limit, int) and limit > 0:
+        deals = deals[:limit]
+        orders = orders[:limit]
 
-        Parameters
-        ----------
-        date_from:
-            Start of the query range (UTC).
-        date_to:
-            End of the query range (UTC).
+    # Normalize minimal fields requested
+    def normalize_deal(d: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "ticket": d.get("ticket"),
+            "symbol": d.get("symbol"),
+            "profit": d.get("profit"),
+            "commission": d.get("commission"),
+            "swap": d.get("swap"),
+            "comment": d.get("comment"),
+            "close_time": d.get("time") or d.get("time_done"),
+        }
 
-        Returns
-        -------
-        list[dict]
-            One dict per deal: ticket, order, symbol, type, volume, price,
-            commission, swap, profit, time, comment.
+    def normalize_order(o: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "ticket": o.get("ticket"),
+            "symbol": o.get("symbol"),
+            "profit": o.get("profit"),
+            "commission": o.get("commission"),
+            "swap": o.get("swap"),
+            "comment": o.get("comment"),
+            "close_time": o.get("time") or o.get("time_done"),
+        }
 
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug(
-            "HistoryService.get_deals called.",
-            extra={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
-        )
-        raise NotImplementedError("HistoryService.get_deals: Phase 2.2.")
+    normalized_deals = [normalize_deal(d) for d in deals]
+    normalized_orders = [normalize_order(o) for o in orders]
 
-    async def get_orders(
-        self,
-        date_from: datetime,
-        date_to: datetime,
-    ) -> list[dict[str, Any]]:
-        """
-        Return all historical orders (filled and cancelled) between ``date_from``
-        and ``date_to``.
-
-        Parameters
-        ----------
-        date_from:
-            Start of the query range (UTC).
-        date_to:
-            End of the query range (UTC).
-
-        Returns
-        -------
-        list[dict]
-            One dict per order: ticket, symbol, type, state, volume, price,
-            stop_loss, take_profit, time_setup, time_done, comment.
-
-        Raises
-        ------
-        NotImplementedError
-            Broker retrieval is not implemented in Phase 2.1.
-        """
-        logger.debug(
-            "HistoryService.get_orders called.",
-            extra={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
-        )
-        raise NotImplementedError("HistoryService.get_orders: Phase 2.2.")
+    return {
+        "deals": normalized_deals,
+        "orders": normalized_orders,
+    }
