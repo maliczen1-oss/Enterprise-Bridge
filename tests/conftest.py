@@ -4,6 +4,7 @@ import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 import logging
+import platform
 
 import core.connection_manager as cm_module
 from config import settings
@@ -165,6 +166,18 @@ def mock_manager_connected(
     fake.fetch_history_deals = _deals
     fake.fetch_history_orders = _orders
 
+    # Capabilities: pretend platform supports and MT5 available
+    fake.get_capabilities = lambda: {
+        "platform": "windows",
+        "mt5Supported": True,
+        "mt5Available": True,
+        "backend": "enabled",
+        "state": "CONNECTED",
+        "mt5Initialized": True,
+        "terminalVersion": "5.0.37",
+        "lastError": None,
+    }
+
     monkeypatch.setattr(cm_module, "manager", fake)
     yield fake
 
@@ -193,6 +206,56 @@ def mock_manager_disconnected(monkeypatch):
     fake.fetch_symbol_tick = lambda symbol: None
     fake.fetch_history_deals = lambda *a, **k: []
     fake.fetch_history_orders = lambda *a, **k: []
+
+    fake.get_capabilities = lambda: {
+        "platform": platform.system().lower(),
+        "mt5Supported": False,
+        "mt5Available": False,
+        "backend": "disabled",
+        "state": "FAILED",
+        "mt5Initialized": False,
+        "terminalVersion": None,
+        "lastError": {"code": "MT5_IMPORT_FAILED", "message": "MetaTrader5 not installed"},
+    }
+
+    monkeypatch.setattr(cm_module, "manager", fake)
+    yield fake
+
+
+@pytest.fixture
+def mock_manager_unsupported(monkeypatch):
+    """
+    Simulate an unsupported platform (e.g., linux where MT5 is not supported).
+    """
+    fake = SimpleNamespace()
+    fake.get_health = lambda: {
+        "connectionState": "UNSUPPORTED_PLATFORM",
+        "mt5Initialized": False,
+        "terminalVersion": None,
+        "lastError": None,
+        "startupTime": None,
+    }
+    fake.get_state = lambda: "UNSUPPORTED_PLATFORM"
+    fake.is_connected = lambda: False
+
+    fake.fetch_account = lambda: None
+    fake.fetch_positions = lambda: []
+    fake.fetch_symbols = lambda: []
+    fake.fetch_symbol_info = lambda symbol: None
+    fake.fetch_symbol_tick = lambda symbol: None
+    fake.fetch_history_deals = lambda *a, **k: []
+    fake.fetch_history_orders = lambda *a, **k: []
+
+    fake.get_capabilities = lambda: {
+        "platform": "linux",
+        "mt5Supported": False,
+        "mt5Available": False,
+        "backend": "disabled",
+        "state": "UNSUPPORTED_PLATFORM",
+        "mt5Initialized": False,
+        "terminalVersion": None,
+        "lastError": None,
+    }
 
     monkeypatch.setattr(cm_module, "manager", fake)
     yield fake
