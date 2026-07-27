@@ -19,7 +19,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from bridge.core.request_context import set_request_id
+from core.request_context import set_request_id
 
 _HEADER = "X-Request-ID"
 
