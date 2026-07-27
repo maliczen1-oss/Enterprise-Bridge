@@ -21,8 +21,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import error_response
+from core.request_context import get_request_id
+from core.responses import error_response
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if self._is_exempt(request.url.path):
             return await call_next(request)
 
-        from bridge.config import settings  # deferred to avoid circular import
+        from config import settings  # deferred to avoid circular import
 
         auth_header = request.headers.get("Authorization", "")
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from bridge.core.models import BridgeResponse, ErrorDetail
+from core.models import BridgeResponse, ErrorDetail
 
 
 def success_response(*, request_id: str, data: Any) -> dict[str, Any]:

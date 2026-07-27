@@ -14,8 +14,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from bridge.core.request_context import get_request_id
-from bridge.core.responses import not_implemented_response
+from core.request_context import get_request_id
+from core.responses import not_implemented_response
 
 router = APIRouter(prefix="/trade", tags=["Trade"])
 
