@@ -1,5 +1,6 @@
 # config.py
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, field_validator, ConfigDict
+from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -18,11 +19,9 @@ class Settings(BaseSettings):
     MT5_TERMINAL_PATH: Optional[str] = Field(None, env="MT5_TERMINAL_PATH")
     MT5_TIMEOUT: int = Field(30000, env="MT5_TIMEOUT")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    @validator("ENVIRONMENT")
+    @field_validator("ENVIRONMENT")
     def validate_env(cls, v):
         if v not in ("development", "staging", "production"):
             raise ValueError("ENVIRONMENT must be one of development, staging, production")

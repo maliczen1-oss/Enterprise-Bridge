@@ -10,6 +10,7 @@ uvicorn[standard]>=0.32.0,<0.33.0
 
 # Data validation and serialisation
 pydantic>=2.9.0,<3.0.0
+pydantic-settings>=2.5.0,<3.0.0
 
 # Environment variable loading
 python-dotenv>=1.0.0,<2.0.0
