@@ -1,14 +1,32 @@
 # api/health.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from core import models
 from core.connection_manager import manager as connection_manager
+from core.request_context import get_request_id
 from datetime import datetime, timezone
+import uuid
+import logging
 
 router = APIRouter()
+logger = logging.getLogger("bridge")
 
 
 @router.get("/health", response_model=models.BridgeResponse)
-async def health():
+async def health(request: Request):
+    """
+    Report bridge health status.
+    
+    Returns structured health envelope with:
+    - bridgeStatus: READY, INITIALIZING, FAILED, UNSUPPORTED_PLATFORM, BACKEND_UNAVAILABLE
+    - connectionState: current MT5 connection state
+    - mt5Initialized: whether MT5 package is initialized
+    - terminalVersion: MT5 terminal version if connected
+    - lastError: error object if connection failed
+    - capabilities: platform/runtime capabilities
+    """
+    request_id = get_request_id() or str(uuid.uuid4())
+    logger.info("GET /health - request_id: %s", request_id)
+    
     cm_health = connection_manager.get_health()
     connection_state = cm_health.get("connectionState")
     mt5_initialized = cm_health.get("mt5Initialized", False)
@@ -40,16 +58,16 @@ async def health():
     }
 
     success = connection_state == "CONNECTED"
-
-    envelope = {
-        "success": success,
-        "requestId": None,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "data": data if success else data,
-        "error": None if success else {
-            "code": "CONNECTION_NOT_READY",
-            "message": "MT5 connection is not ready. See lastError and capabilities for details."
-        }
-    }
-
-    return envelope
+    
+    # Return proper BridgeResponse instance
+    # FastAPI will validate against response_model and serialize via model_dump(by_alias=True, mode="json")
+    return models.BridgeResponse(
+        success=success,
+        requestId=request_id,
+        timestamp=datetime.now(timezone.utc),
+        data=data,
+        error=None if success else models.ErrorDetail(
+            code="CONNECTION_NOT_READY",
+            message="MT5 connection is not ready. See lastError and capabilities for details.",
+        ),
+    )
