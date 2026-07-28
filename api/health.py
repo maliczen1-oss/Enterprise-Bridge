@@ -1,5 +1,6 @@
 # api/health.py
-from fastapi import APIRouter, Request
+import uuid
+from fastapi import APIRouter
 from core import models
 from core.connection_manager import manager as connection_manager
 from core.request_context import get_request_id
@@ -58,16 +59,18 @@ async def health(request: Request):
     }
 
     success = connection_state == "CONNECTED"
-    
-    # Return proper BridgeResponse instance
-    # FastAPI will validate against response_model and serialize via model_dump(by_alias=True, mode="json")
-    return models.BridgeResponse(
-        success=success,
-        requestId=request_id,
-        timestamp=datetime.now(timezone.utc),
-        data=data,
-        error=None if success else models.ErrorDetail(
-            code="CONNECTION_NOT_READY",
-            message="MT5 connection is not ready. See lastError and capabilities for details.",
-        ),
-    )
+
+    request_id = get_request_id() or str(uuid.uuid4())
+
+    envelope = {
+        "success": success,
+        "requestId": request_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data": data if success else data,
+        "error": None if success else {
+            "code": "CONNECTION_NOT_READY",
+            "message": "MT5 connection is not ready. See lastError and capabilities for details."
+        }
+    }
+
+    return envelope
