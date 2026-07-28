@@ -19,6 +19,9 @@ async def test_health_endpoint_connected(mock_manager_connected):
     assert "data" in body
     assert body["data"]["connectionState"] == "CONNECTED"
     assert body["data"]["mt5Initialized"] is True
+    assert isinstance(body.get("requestId"), str) and len(body["requestId"]) > 0
+    assert "timestamp" in body
+    assert "error" in body
 
 
 @pytest.mark.asyncio
@@ -29,6 +32,9 @@ async def test_health_endpoint_disconnected(mock_manager_disconnected):
     body = r.json()
     assert body["data"]["connectionState"] == "FAILED"
     assert body["success"] is False
+    assert isinstance(body.get("requestId"), str) and len(body["requestId"]) > 0
+    assert "timestamp" in body
+    assert "data" in body
 
 
 @pytest.mark.asyncio
