@@ -5,12 +5,29 @@ from core import models
 from core.connection_manager import manager as connection_manager
 from core.request_context import get_request_id
 from datetime import datetime, timezone
+import uuid
+import logging
 
 router = APIRouter()
+logger = logging.getLogger("bridge")
 
 
 @router.get("/health", response_model=models.BridgeResponse)
-async def health():
+async def health(request: Request):
+    """
+    Report bridge health status.
+    
+    Returns structured health envelope with:
+    - bridgeStatus: READY, INITIALIZING, FAILED, UNSUPPORTED_PLATFORM, BACKEND_UNAVAILABLE
+    - connectionState: current MT5 connection state
+    - mt5Initialized: whether MT5 package is initialized
+    - terminalVersion: MT5 terminal version if connected
+    - lastError: error object if connection failed
+    - capabilities: platform/runtime capabilities
+    """
+    request_id = get_request_id() or str(uuid.uuid4())
+    logger.info("GET /health - request_id: %s", request_id)
+    
     cm_health = connection_manager.get_health()
     connection_state = cm_health.get("connectionState")
     mt5_initialized = cm_health.get("mt5Initialized", False)
