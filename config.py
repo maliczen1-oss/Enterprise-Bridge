@@ -1,3 +1,14 @@
+"""
+ATLAS CERTIFICATION HEADER
+name=config.py
+Version: 3.3.0
+Change Log:
+- Added BROKER_TRADING_ENABLED setting to centralised configuration (default False).
+- This makes trading opt-in via settings or environment variable and supports validation at startup.
+
+Production Certification: Phase 3.3
+"""
+
 # config.py
 from pydantic import Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
@@ -18,6 +29,9 @@ class Settings(BaseSettings):
     MT5_SERVER: Optional[str] = Field(None, env="MT5_SERVER")
     MT5_TERMINAL_PATH: Optional[str] = Field(None, env="MT5_TERMINAL_PATH")
     MT5_TIMEOUT: int = Field(30000, env="MT5_TIMEOUT")
+
+    # Operational flags
+    BROKER_TRADING_ENABLED: bool = Field(False, env="BROKER_TRADING_ENABLED")
 
     model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
 
