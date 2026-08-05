@@ -10,13 +10,27 @@ logger = logging.getLogger("bridge")
 def get_positions() -> List[Dict[str, Any]]:
     """
     Return open positions normalized to the Bridge API shape.
-    Returns an empty list when positions are unavailable or the bridge is not connected.
+
+    Returns an empty list when positions are unavailable, malformed, or the
+    bridge is not connected. Defensive against varying MT5 SDK shapes.
     """
     logger.info("Positions request")
-    raw = connection_manager.fetch_positions()
+    try:
+        raw = connection_manager.fetch_positions()
+    except Exception as exc:
+        logger.exception("Failed to fetch positions from connection manager: %s", exc)
+        return []
+
+    if not raw:
+        return []
+
     out: List[Dict[str, Any]] = []
 
     for p in raw:
+        if not isinstance(p, dict):
+            logger.debug("Skipping non-dict position entry: %r", p)
+            continue
+
         pos = {
             "ticket": p.get("ticket") or p.get("position") or p.get("ticket_id"),
             "symbol": p.get("symbol") or p.get("name"),
