@@ -69,3 +69,17 @@ class ConfigurationException(BridgeBaseException):
 
     def __init__(self, message: str = "Server configuration error.") -> None:
         super().__init__(message)
+
+
+class NotImplementedException(BridgeBaseException):
+    """Raised when an API or service is intentionally not implemented in this
+    deployment/phase. This is preferred over raising plain ``NotImplementedError``
+    because it carries an explicit HTTP status code and machine-readable error
+    code for client integrations.
+    """
+
+    status_code: int = HTTPStatus.NOT_IMPLEMENTED
+    code: str = "NOT_IMPLEMENTED"
+
+    def __init__(self, message: str = "This functionality is not implemented in this deployment.") -> None:
+        super().__init__(message)

@@ -26,6 +26,7 @@ from core.request_context import get_request_id
 from core.responses import success_response, error_response
 from core.connection_manager import manager as connection_manager
 from services import trade_service
+from core.exceptions import BridgeBaseException
 
 # Prefer using the project's configuration system if available
 from config import settings
@@ -137,13 +138,15 @@ async def open_trade(request: Request, payload: OpenTradeRequest = Body(...)):
         # If service is present and implements open_trade, call it; otherwise return NOT_IMPLEMENTED.
         try:
             result = await trade_service.TradeService().open_trade(payload.dict())
-        except NotImplementedError:
+        except BridgeBaseException as be:
+            # Map known BridgeBaseException subclasses to canonical BridgeResponse envelopes
+            logger.info("Trade operation not implemented or refused - %s requestId=%s", be.code, request_id)
             return JSONResponse(
-                status_code=501,
+                status_code=int(be.status_code),
                 content=error_response(
                     request_id=request_id or str(start_ts.timestamp()),
-                    code="NOT_IMPLEMENTED",
-                    message="Trade execution not implemented on this instance.",
+                    code=be.code,
+                    message=be.message,
                 ),
             )
         except Exception:
@@ -215,13 +218,14 @@ async def modify_trade(ticket: int = Path(..., description="Broker ticket"), req
         # Call service
         try:
             result = await trade_service.TradeService().modify_trade(ticket=ticket, stop_loss=payload.stopLoss, take_profit=payload.takeProfit)
-        except NotImplementedError:
+        except BridgeBaseException as be:
+            logger.info("Trade operation not implemented or refused - %s requestId=%s", be.code, request_id)
             return JSONResponse(
-                status_code=501,
+                status_code=int(be.status_code),
                 content=error_response(
                     request_id=request_id or str(start_ts.timestamp()),
-                    code="NOT_IMPLEMENTED",
-                    message="Trade modification not implemented on this instance.",
+                    code=be.code,
+                    message=be.message,
                 ),
             )
         except Exception:
@@ -290,13 +294,14 @@ async def close_trade(ticket: int = Path(..., description="Broker ticket"), requ
 
         try:
             result = await trade_service.TradeService().close_trade(ticket=ticket)
-        except NotImplementedError:
+        except BridgeBaseException as be:
+            logger.info("Trade operation not implemented or refused - %s requestId=%s", be.code, request_id)
             return JSONResponse(
-                status_code=501,
+                status_code=int(be.status_code),
                 content=error_response(
                     request_id=request_id or str(start_ts.timestamp()),
-                    code="NOT_IMPLEMENTED",
-                    message="Trade close not implemented on this instance.",
+                    code=be.code,
+                    message=be.message,
                 ),
             )
         except Exception:
@@ -332,4 +337,3 @@ async def close_trade(ticket: int = Path(..., description="Broker ticket"), requ
                 message="An internal error occurred. Reference: %s" % (request_id or ""),
             ),
         )
-```json```

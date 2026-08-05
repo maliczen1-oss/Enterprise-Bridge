@@ -11,11 +11,10 @@ def get_account() -> Optional[Dict[str, Any]]:
     """
     Return account metadata and balances. Returns None if unavailable.
     """
-    start = logger and None
     logger.info("Account request")
     info = connection_manager.fetch_account()
-    if not info:
-        logger.info("Account data unavailable")
+    if not info or not isinstance(info, dict):
+        logger.info("Account data unavailable or malformed")
         return None
 
     # Map fields to the requested output shape. MT5 account_info fields vary by build.
