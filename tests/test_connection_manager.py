@@ -962,3 +962,158 @@ def test_concurrent_reads_and_diagnostics_remain_safe_when_connected(ready_manag
     assert client.account_calls == 250
     assert client.positions_calls == 250
     assert client.symbols_calls == 250
+# ============================================================================
+# ENTERPRISE EDGE-CASE TESTS
+# Batch 1 of 2
+# ============================================================================
+
+
+def test_stop_during_reconnect_backoff_aborts_cleanly(manager_factory, monkeypatch):
+    """
+    If stop() is requested while the worker is waiting for a reconnect,
+    the worker must terminate without attempting another initialize().
+    """
+    client = FakeMT5Client(initialize_result=False)
+
+    manager, _ = manager_factory(client=client)
+
+    manager._stop_event = ScriptedStopEvent([False, True])
+
+    sleep = Mock()
+
+    monkeypatch.setattr(connection_manager_module.time, "sleep", sleep)
+    monkeypatch.setattr(connection_manager_module.random, "uniform", lambda *_: 0)
+
+    manager._run()
+
+    assert client.initialize_calls == [
+        DEFAULT_SETTINGS["MT5_TERMINAL_PATH"]
+    ]
+
+    assert manager.get_state() in (
+        ConnectionState.DISCONNECTED.value,
+        ConnectionState.FAILED.value,
+    )
+
+
+def test_stop_is_idempotent_after_multiple_calls(ready_manager):
+    """
+    Enterprise requirement:
+    stop() may be called repeatedly by service shutdown handlers.
+    """
+
+    manager, client = ready_manager()
+
+    manager.stop()
+
+    shutdowns = client.shutdown_calls
+
+    manager.stop()
+    manager.stop()
+    manager.stop()
+
+    assert client.shutdown_calls >= shutdowns
+
+    assert manager.get_state() == ConnectionState.DISCONNECTED.value
+
+    assert manager.is_connected() is False
+
+
+def test_multiple_restart_requests_are_safe(manager_factory, monkeypatch):
+    """
+    restart() should never create multiple worker threads.
+    """
+
+    RecordingThread.instances.clear()
+
+    monkeypatch.setattr(
+        connection_manager_module.threading,
+        "Thread",
+        RecordingThread,
+    )
+
+    monkeypatch.setattr(
+        connection_manager_module.time,
+        "sleep",
+        Mock(),
+    )
+
+    client = FakeMT5Client()
+
+    manager, _ = manager_factory(client=client)
+
+    assert manager._attempt_initialize_and_connect()
+
+    manager.restart()
+    manager.restart()
+    manager.restart()
+
+    assert len(RecordingThread.instances) == 1
+
+
+def test_start_stop_start_stop_lifecycle(manager_factory, monkeypatch):
+    """
+    A ConnectionManager should survive repeated service lifecycle events.
+    """
+
+    RecordingThread.instances.clear()
+
+    monkeypatch.setattr(
+        connection_manager_module.threading,
+        "Thread",
+        RecordingThread,
+    )
+
+    client = FakeMT5Client()
+
+    manager, _ = manager_factory(client=client)
+
+    manager.start()
+
+    assert len(RecordingThread.instances) == 1
+
+    manager.stop()
+
+    assert manager.get_state() == ConnectionState.DISCONNECTED.value
+
+    manager.start()
+
+    assert len(RecordingThread.instances) == 2
+
+    manager.stop()
+
+    assert manager.get_state() == ConnectionState.DISCONNECTED.value
+
+
+def test_connected_reads_remain_safe_when_mt5_returns_none(ready_manager):
+    """
+    Some MT5 terminals occasionally return None instead of raising.
+    The bridge must simply pass the values through safely.
+    """
+
+    manager, client = ready_manager()
+
+    client.account_result = None
+    client.positions_result = None
+    client.symbols_result = None
+    client.symbol_info_result = None
+    client.symbol_tick_result = None
+    client.history_deals_result = None
+    client.history_orders_result = None
+
+    assert manager.fetch_account() is None
+
+    assert manager.fetch_positions() == []
+
+    assert manager.fetch_symbols() == []
+
+    assert manager.fetch_symbol_info("EURUSD") is None
+
+    assert manager.fetch_symbol_tick("EURUSD") is None
+
+    from_dt = datetime.datetime.utcnow()
+    to_dt = from_dt
+
+    assert manager.fetch_history_deals(from_dt, to_dt) == []
+
+    assert manager.fetch_history_orders(from_dt, to_dt) == []
