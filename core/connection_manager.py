@@ -10,10 +10,6 @@ Change Log:
 
 Production Certification: Phase 3.2
 
-Connection manager that uses core.mt5_client.MT5Client to manage the
-MetaTrader5 terminal lifecycle and provide read-only data proxies for
-services.
-
 This implementation keeps the original contract but runs the connection
 lifecycle in a dedicated background worker thread. It implements
 exponential backoff with jitter, reconnect counters, last reconnect
