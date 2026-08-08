@@ -9,13 +9,6 @@ Change Log:
 - Normalized health and capability payloads for production certification.
 
 Production Certification: Phase 3.2
-
-This implementation keeps the original contract but runs the connection
-lifecycle in a dedicated background worker thread. It implements
-exponential backoff with jitter, reconnect counters, last reconnect
-timestamps and a configurable maximum retry policy. All public APIs are
-thread-safe and never raise MT5 exceptions to callers; errors are
-recorded via _record_error and exposed through get_health()/get_capabilities().
 """
 
 from __future__ import annotations
