@@ -9,10 +9,7 @@ Change Log:
 - Normalized health and capability payloads for production certification.
 
 Production Certification: Phase 3.2
-"""
 
-# core/connection_manager.py
-"""
 Connection manager that uses core.mt5_client.MT5Client to manage the
 MetaTrader5 terminal lifecycle and provide read-only data proxies for
 services.
