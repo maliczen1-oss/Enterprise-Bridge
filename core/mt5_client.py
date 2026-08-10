@@ -2,23 +2,33 @@
 ATLAS CERTIFICATION HEADER
 
 name=core/mt5_client.py
-Version: 4.0.1-DIAGNOSTIC
+Version: 4.0.2-TRANSPORT-DIAGNOSTIC
+
+Purpose
+-------
+Production MetaApi / MetaTrader5 compatibility client for Enterprise Bridge.
 
 Change Log
 ----------
-- Preserved the Atlas Phase 4.0 MetaApi backend and MT5Client public interface.
-- Added safe MetaApi transport diagnostics for Railway investigation.
-- Added exception class, sanitized reason, hostname, scheme, port, errno,
-  underlying cause and retry-attempt information.
-- Added safe redaction of MetaApi credentials and authorization material.
-- Added explicit transport logging without logging request headers.
-- Preserved MetaApi account-region discovery.
-- Preserved optional Windows MetaTrader5 fallback.
-- Preserved read-only account, positions, symbols, tick and history methods.
-- No trading endpoint or trade execution logic has been added.
-- This release is diagnostic only; it does not make speculative transport fixes.
+4.0.2-TRANSPORT-DIAGNOSTIC
+- Targets the captured Railway transport failure:
+  gaierror [Errno -2] Name or service not known.
+- Removes diagnostic-only trust_env=False from the HTTP client.
+- Allows normal Railway proxy/environment configuration.
+- Makes METAAPI_PROVISIONING_BASE_URL configurable.
+- Preserves the default MetaApi provisioning endpoint.
+- Adds safe DNS-resolution diagnostics.
+- Records resolved addresses when DNS succeeds.
+- Records resolver exception class and errno when DNS fails.
+- Preserves credential redaction.
+- Preserves MetaApi retry behaviour.
+- Preserves existing MT5Client public interface.
+- Does not modify readiness/lifecycle state handling.
+- Does not modify MetaApi credentials.
+- Does not add trade execution functionality.
 
-Production Certification: Atlas Phase 4.0.1 Diagnostic
+Production Certification:
+Atlas Phase 4.0.2 Transport Diagnostic
 """
 
 from __future__ import annotations
@@ -27,7 +37,9 @@ import datetime
 import logging
 import os
 import platform
+import socket
 import threading
+import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
@@ -73,8 +85,6 @@ METAAPI_CONFIGURED = bool(
     and METAAPI_ACCOUNT_ID
 )
 
-
-# Public compatibility constant retained from Phase 4.0.
 MT5_AVAILABLE = (
     METAAPI_CONFIGURED
     or (
@@ -97,7 +107,7 @@ class MetaApiError(RuntimeError):
 
 
 # ============================================================================
-# Configuration helpers
+# Environment helpers
 # ============================================================================
 
 def _env_float(
@@ -107,23 +117,16 @@ def _env_float(
 
     value = os.getenv(name)
 
-    if value is None:
-        return default
-
-    if not value.strip():
+    if value is None or not value.strip():
         return default
 
     try:
-
         parsed = float(value)
 
         if parsed > 0:
             return parsed
 
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         pass
 
     return default
@@ -138,53 +141,27 @@ def _env_int(
 
     value = os.getenv(name)
 
-    if value is None:
-        return default
-
-    if not value.strip():
+    if value is None or not value.strip():
         return default
 
     try:
-
         parsed = int(value)
 
         if minimum <= parsed <= maximum:
             return parsed
 
-    except (
-        TypeError,
-        ValueError,
-    ):
+    except (TypeError, ValueError):
         pass
 
     return default
 
 
-def _metaapi_region_host(
-    region: Optional[str],
-) -> str:
-    """
-    Build the MetaApi client API hostname from the account region.
-    """
-
-    normalized = (
-        region
-        or "new-york"
-    ).strip().lower()
-
-    normalized = (
-        normalized
-        .replace("_", "-")
-        .replace(" ", "-")
-    )
-
-    return (
-        "https://mt-client-api-v1."
-        f"{normalized}.agiliumtrade.ai"
-    )
-
-
 def _provisioning_base_url() -> str:
+    """
+    Return the configurable MetaApi provisioning endpoint.
+
+    Default is the currently configured MetaApi provisioning API.
+    """
 
     return (
         os.getenv(
@@ -209,31 +186,40 @@ def _explicit_client_base_url() -> Optional[str]:
     return value.rstrip("/")
 
 
+def _metaapi_region_host(
+    region: Optional[str],
+) -> str:
+
+    normalized = (
+        region or "new-york"
+    ).strip().lower()
+
+    normalized = (
+        normalized
+        .replace("_", "-")
+        .replace(" ", "-")
+    )
+
+    return (
+        "https://mt-client-api-v1."
+        f"{normalized}.agiliumtrade.ai"
+    )
+
+
 def _as_dict(
     value: Any,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Convert common MetaTrader5 response objects to dictionaries.
-    """
 
     if value is None:
         return None
 
-    if isinstance(
-        value,
-        dict,
-    ):
+    if isinstance(value, dict):
         return dict(value)
 
-    if hasattr(
-        value,
-        "_asdict",
-    ):
+    if hasattr(value, "_asdict"):
 
         try:
-            return dict(
-                value._asdict()
-            )
+            return dict(value._asdict())
 
         except Exception:
             return None
@@ -248,12 +234,6 @@ def _as_dict(
 def _normalise_datetime(
     value: datetime.datetime,
 ) -> datetime.datetime:
-    """
-    Convert history boundaries to timezone-aware UTC.
-
-    Naive datetimes are treated as UTC so Railway host timezone settings
-    cannot alter historical queries.
-    """
 
     if value.tzinfo is None:
 
@@ -272,50 +252,122 @@ def _iso_datetime(
 
     return (
         _normalise_datetime(value)
-        .isoformat(
-            timespec="milliseconds"
-        )
-        .replace(
-            "+00:00",
-            "Z",
-        )
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
     )
 
 
 # ============================================================================
-# Safe transport diagnostics
+# Safe credential redaction
+# ============================================================================
+
+def _redact_sensitive_text(
+    value: Any,
+) -> str:
+    """
+    Convert exception information to safe text.
+
+    Never expose:
+    - METAAPI_TOKEN
+    - METAAPI_ACCOUNT_ID
+    - Authorization headers
+    - passwords
+    - API keys
+    - secrets
+    """
+
+    text = str(value)
+
+    sensitive_values = (
+        METAAPI_TOKEN,
+        METAAPI_ACCOUNT_ID,
+    )
+
+    for sensitive in sensitive_values:
+
+        if sensitive:
+            text = text.replace(
+                sensitive,
+                "[REDACTED]",
+            )
+
+    markers = (
+        "Authorization:",
+        "authorization:",
+        "auth-token:",
+        "Auth-Token:",
+        "token=",
+        "access_token=",
+        "refresh_token=",
+        "password=",
+        "secret=",
+        "api_key=",
+        "apikey=",
+    )
+
+    for marker in markers:
+
+        if marker in text:
+
+            prefix, _, remainder = (
+                text.partition(marker)
+            )
+
+            if remainder:
+
+                separator = ""
+
+                if remainder.startswith(" "):
+                    separator = " "
+
+                elif remainder.startswith("="):
+                    separator = "="
+
+                text = (
+                    prefix
+                    + marker
+                    + separator
+                    + "[REDACTED]"
+                )
+
+    return text[:1000]
+
+
+# ============================================================================
+# URL-safe diagnostics
 # ============================================================================
 
 def _safe_hostname(
     url: str,
 ) -> Optional[str]:
-    """
-    Return only the hostname from a URL.
 
-    Path, query parameters and credentials are intentionally discarded.
-    """
+    try:
+        return urlparse(url).hostname
+
+    except Exception:
+        return None
+
+
+def _safe_scheme(
+    url: str,
+) -> Optional[str]:
 
     try:
 
-        parsed = urlparse(url)
-
-        return parsed.hostname
+        return (
+            urlparse(url)
+            .scheme
+            .lower()
+            or None
+        )
 
     except Exception:
-
         return None
 
 
 def _safe_port(
     url: str,
 ) -> Optional[int]:
-    """
-    Return only the network port.
-
-    Defaults:
-        https -> 443
-        http  -> 80
-    """
 
     try:
 
@@ -336,113 +388,9 @@ def _safe_port(
     return None
 
 
-def _safe_scheme(
-    url: str,
-) -> Optional[str]:
-
-    try:
-
-        return (
-            urlparse(url)
-            .scheme
-            .lower()
-            or None
-        )
-
-    except Exception:
-
-        return None
-
-
-def _redact_sensitive_text(
-    value: Any,
-) -> str:
-    """
-    Safely stringify and redact known sensitive values.
-
-    This function is deliberately conservative.
-
-    It removes:
-    - METAAPI_TOKEN
-    - METAAPI_ACCOUNT_ID
-    - common Authorization/auth-token forms
-    - common secret/password fields
-
-    It never logs request headers.
-    """
-
-    text = str(value)
-
-    sensitive_values = (
-        METAAPI_TOKEN,
-        METAAPI_ACCOUNT_ID,
-    )
-
-    for sensitive in sensitive_values:
-
-        if sensitive:
-
-            text = text.replace(
-                sensitive,
-                "[REDACTED]",
-            )
-
-    # Defensive textual redaction for common credential forms.
-
-    replacement_patterns = (
-        "Authorization:",
-        "authorization:",
-        "auth-token:",
-        "Auth-Token:",
-        "auth_token=",
-        "token=",
-        "access_token=",
-        "refresh_token=",
-        "password=",
-        "secret=",
-        "api_key=",
-        "apikey=",
-    )
-
-    for marker in replacement_patterns:
-
-        if marker in text:
-
-            prefix, _, remainder = (
-                text.partition(marker)
-            )
-
-            if remainder:
-
-                separator = ""
-
-                if remainder.startswith(
-                    " "
-                ):
-                    separator = " "
-
-                elif remainder.startswith(
-                    "="
-                ):
-                    separator = "="
-
-                text = (
-                    prefix
-                    + marker
-                    + separator
-                    + "[REDACTED]"
-                )
-
-    return text[:1000]
-
-
 def _exception_errno(
     exc: BaseException,
 ) -> Any:
-    """
-    Extract errno from an exception without assuming a particular
-    httpx/httpcore implementation.
-    """
 
     errno_value = getattr(
         exc,
@@ -459,33 +407,17 @@ def _exception_errno(
         (),
     )
 
-    if args:
-
-        first = args[0]
-
-        if isinstance(
-            first,
-            int,
-        ):
-            return first
+    if args and isinstance(args[0], int):
+        return args[0]
 
     return None
 
 
 def _exception_chain(
     exc: BaseException,
-) -> List[
-    BaseException
-]:
-    """
-    Safely walk __cause__ / __context__.
+) -> List[BaseException]:
 
-    The list is bounded to prevent pathological exception chains.
-    """
-
-    chain: List[
-        BaseException
-    ] = []
+    chain: List[BaseException] = []
 
     current: Optional[
         BaseException
@@ -504,7 +436,6 @@ def _exception_chain(
             break
 
         visited.add(identifier)
-
         chain.append(current)
 
         cause = getattr(
@@ -516,7 +447,6 @@ def _exception_chain(
         if cause is not None:
 
             current = cause
-
             continue
 
         context = getattr(
@@ -528,12 +458,121 @@ def _exception_chain(
         if context is not None:
 
             current = context
-
             continue
 
         break
 
     return chain
+
+
+# ============================================================================
+# DNS diagnostics
+# ============================================================================
+
+def _resolve_hostname(
+    hostname: Optional[str],
+    port: Optional[int],
+) -> Dict[str, Any]:
+    """
+    Safely resolve a hostname using the container's system resolver.
+
+    This is diagnostic only.
+
+    No credentials or complete URLs are involved.
+    """
+
+    result: Dict[str, Any] = {
+        "hostname": hostname,
+        "port": port,
+        "resolved": False,
+        "addresses": [],
+    }
+
+    if not hostname:
+
+        result.update(
+            {
+                "resolverException": (
+                    "InvalidHostname"
+                ),
+                "resolverReason": (
+                    "No hostname could be extracted."
+                ),
+            }
+        )
+
+        return result
+
+    target_port = port or 443
+
+    try:
+
+        records = socket.getaddrinfo(
+            hostname,
+            target_port,
+            type=socket.SOCK_STREAM,
+        )
+
+        addresses: List[str] = []
+
+        for record in records:
+
+            sockaddr = record[4]
+
+            if not sockaddr:
+                continue
+
+            address = sockaddr[0]
+
+            if address not in addresses:
+                addresses.append(address)
+
+        result["resolved"] = bool(addresses)
+        result["addresses"] = addresses[:10]
+
+        if not addresses:
+
+            result["resolverException"] = (
+                "NoAddresses"
+            )
+
+            result["resolverReason"] = (
+                "Resolver returned no usable addresses."
+            )
+
+    except socket.gaierror as exc:
+
+        result["resolverException"] = (
+            type(exc).__name__
+        )
+
+        result["resolverErrno"] = (
+            getattr(
+                exc,
+                "errno",
+                None,
+            )
+        )
+
+        result["resolverReason"] = (
+            _redact_sensitive_text(exc)
+        )
+
+    except Exception as exc:
+
+        result["resolverException"] = (
+            type(exc).__name__
+        )
+
+        result["resolverErrno"] = (
+            _exception_errno(exc)
+        )
+
+        result["resolverReason"] = (
+            _redact_sensitive_text(exc)
+        )
+
+    return result
 
 
 def _build_transport_diagnostics(
@@ -542,41 +581,35 @@ def _build_transport_diagnostics(
     attempt: int,
     attempts: int,
 ) -> Dict[str, Any]:
-    """
-    Build a safe diagnostic structure for a MetaApi transport failure.
 
-    No credentials, request headers, full URLs, account IDs or query strings
-    are returned.
-    """
+    hostname = _safe_hostname(url)
+    scheme = _safe_scheme(url)
+    port = _safe_port(url)
 
-    diagnostics: Dict[
-        str,
-        Any,
-    ] = {
-        "host": _safe_hostname(url),
-        "scheme": _safe_scheme(url),
-        "port": _safe_port(url),
+    diagnostics: Dict[str, Any] = {
+        "host": hostname,
+        "scheme": scheme,
+        "port": port,
         "exception": type(exc).__name__,
         "attempt": attempt,
         "attempts": attempts,
-        "reason": _redact_sensitive_text(
-            exc
-        ),
+        "reason": _redact_sensitive_text(exc),
     }
 
-    errno_value = _exception_errno(
-        exc
-    )
+    errno_value = _exception_errno(exc)
 
     if errno_value is not None:
 
-        diagnostics[
-            "errno"
-        ] = errno_value
+        diagnostics["errno"] = errno_value
 
-    chain = _exception_chain(
-        exc
+    dns = _resolve_hostname(
+        hostname,
+        port,
     )
+
+    diagnostics["dns"] = dns
+
+    chain = _exception_chain(exc)
 
     if len(chain) > 1:
 
@@ -589,7 +622,7 @@ def _build_transport_diagnostics(
             start=1,
         ):
 
-            cause_data: Dict[
+            cause: Dict[
                 str,
                 Any,
             ] = {
@@ -604,37 +637,25 @@ def _build_transport_diagnostics(
                 ),
             }
 
-            cause_errno = (
-                _exception_errno(item)
+            cause_errno = _exception_errno(
+                item
             )
 
             if cause_errno is not None:
+                cause["errno"] = cause_errno
 
-                cause_data[
-                    "errno"
-                ] = cause_errno
+            causes.append(cause)
 
-            causes.append(
-                cause_data
-            )
-
-        diagnostics[
-            "causeChain"
-        ] = causes
+        diagnostics["causeChain"] = causes
 
     return diagnostics
 
 
 # ============================================================================
-# Capability model
+# Capabilities
 # ============================================================================
 
 def get_capabilities() -> Dict[str, Any]:
-    """
-    Return the runtime/backend capability model consumed by ConnectionManager.
-
-    MetaApi is considered supported on Railway/Linux when credentials exist.
-    """
 
     local_supported = (
         PLATFORM == "windows"
@@ -687,17 +708,6 @@ def get_capabilities() -> Dict[str, Any]:
 # ============================================================================
 
 class MT5Client:
-    """
-    Compatibility wrapper used by ConnectionManager.
-
-    Backend selection:
-
-    1. MetaApi REST when METAAPI_TOKEN and METAAPI_ACCOUNT_ID are configured.
-    2. Legacy MetaTrader5 Python bindings on supported Windows hosts when
-       MetaApi is not configured.
-
-    The public interface remains compatible with the existing bridge.
-    """
 
     def __init__(
         self,
@@ -732,13 +742,11 @@ class MT5Client:
             httpx.Client
         ] = None
 
-        self._client_base_url: Optional[
-            str
-        ] = _explicit_client_base_url()
+        self._client_base_url = (
+            _explicit_client_base_url()
+        )
 
-        self._region: Optional[
-            str
-        ] = None
+        self._region: Optional[str] = None
 
         self._account_metadata: Optional[
             Dict[str, Any]
@@ -761,11 +769,6 @@ class MT5Client:
             10.0,
         )
 
-        # Diagnostic release intentionally uses a bounded retry count.
-        #
-        # This is not a transport fix.
-        # It merely allows us to distinguish persistent failures from a
-        # transient connection failure.
         self._retry_count = _env_int(
             "METAAPI_RETRY_COUNT",
             3,
@@ -778,33 +781,18 @@ class MT5Client:
             0.75,
         )
 
-    # ========================================================================
-    # Backend information
-    # ========================================================================
-
     @property
-    def backend(
-        self,
-    ) -> str:
+    def backend(self) -> str:
         return self._backend
 
     @property
-    def initialized(
-        self,
-    ) -> bool:
+    def initialized(self) -> bool:
         return self._initialized
 
-    # ========================================================================
-    # Backend helpers
-    # ========================================================================
-
-    def _use_legacy(
-        self,
-    ) -> bool:
+    def _use_legacy(self) -> bool:
 
         return bool(
-            self._backend
-            == "metatrader5"
+            self._backend == "metatrader5"
             and self._mt5 is not None
         )
 
@@ -825,6 +813,11 @@ class MT5Client:
                     connect=self._connect_timeout,
                 )
 
+                # IMPORTANT:
+                # trust_env is deliberately NOT disabled.
+                #
+                # Railway/container proxy and network environment variables
+                # must be allowed to participate in this transport test.
                 self._http = httpx.Client(
                     timeout=timeout,
                     headers={
@@ -833,43 +826,28 @@ class MT5Client:
                         ),
                         "User-Agent": (
                             "WealthBuilder-Bridge/"
-                            "4.0.1-DIAGNOSTIC"
+                            "4.0.2-TRANSPORT-DIAGNOSTIC"
                         ),
                     },
                     follow_redirects=True,
-
-                    # Diagnostic-only release:
-                    #
-                    # Do not allow Railway proxy environment variables to
-                    # silently affect the diagnostic result.
-                    #
-                    # The underlying transport error will therefore describe
-                    # direct MetaApi connectivity.
-                    trust_env=False,
                 )
 
             return self._http
 
     # ========================================================================
-    # MetaApi authentication
+    # Authentication
     # ========================================================================
 
     def _metaapi_headers(
         self,
     ) -> Dict[str, str]:
-        """
-        Build MetaApi authentication headers.
-
-        IMPORTANT:
-            This dictionary must NEVER be logged.
-        """
 
         return {
             "auth-token": METAAPI_TOKEN,
             "Accept": "application/json",
             "User-Agent": (
                 "WealthBuilder-Bridge/"
-                "4.0.1-DIAGNOSTIC"
+                "4.0.2-TRANSPORT-DIAGNOSTIC"
             ),
         }
 
@@ -885,11 +863,6 @@ class MT5Client:
         status_code: Optional[int] = None,
         details: Any = None,
     ) -> None:
-        """
-        Store a sanitized error.
-
-        Authentication credentials are deliberately removed.
-        """
 
         safe_details: Any = None
 
@@ -910,7 +883,7 @@ class MT5Client:
             dict,
         ):
 
-            sensitive = {
+            blocked = {
                 "token",
                 "auth-token",
                 "authorization",
@@ -926,18 +899,16 @@ class MT5Client:
 
             for key, value in details.items():
 
-                normalized_key = (
+                normalized = (
                     str(key)
                     .strip()
                     .lower()
                 )
 
-                if normalized_key in sensitive:
+                if normalized in blocked:
                     continue
 
-                safe_details[
-                    str(key)
-                ] = value
+                safe_details[str(key)] = value
 
         self._last_error = {
             "code": str(code),
@@ -946,14 +917,11 @@ class MT5Client:
             "details": safe_details,
         }
 
-    def _clear_error(
-        self,
-    ) -> None:
-
+    def _clear_error(self) -> None:
         self._last_error = None
 
     # ========================================================================
-    # MetaApi HTTP request
+    # MetaApi request
     # ========================================================================
 
     def _request_metaapi(
@@ -965,26 +933,6 @@ class MT5Client:
             Dict[str, Any]
         ] = None,
     ) -> Any:
-        """
-        Execute a MetaApi REST request.
-
-        Diagnostic behaviour:
-
-        - captures the exact httpx exception class
-        - captures the sanitized exception message
-        - captures hostname
-        - captures scheme
-        - captures port
-        - captures errno when available
-        - captures the underlying exception chain
-        - records retry attempt/count
-        - never logs request headers
-        - never logs the MetaApi token
-        - never logs the account ID
-        - never logs the complete URL
-
-        No speculative network workaround is applied here.
-        """
 
         client = (
             self._ensure_http_client()
@@ -1017,10 +965,6 @@ class MT5Client:
 
                 break
 
-            # =================================================================
-            # Timeout
-            # =================================================================
-
             except httpx.TimeoutException as exc:
 
                 last_exception = exc
@@ -1044,45 +988,17 @@ class MT5Client:
                     "MetaApi transport timeout: "
                     "host=%s scheme=%s port=%s "
                     "exception=%s attempt=%s/%s "
-                    "errno=%s reason=%s",
-                    diagnostics.get(
-                        "host"
-                    ),
-                    diagnostics.get(
-                        "scheme"
-                    ),
-                    diagnostics.get(
-                        "port"
-                    ),
-                    diagnostics.get(
-                        "exception"
-                    ),
-                    diagnostics.get(
-                        "attempt"
-                    ),
-                    diagnostics.get(
-                        "attempts"
-                    ),
-                    diagnostics.get(
-                        "errno"
-                    ),
-                    diagnostics.get(
-                        "reason"
-                    ),
+                    "errno=%s reason=%s dns=%s",
+                    diagnostics.get("host"),
+                    diagnostics.get("scheme"),
+                    diagnostics.get("port"),
+                    diagnostics.get("exception"),
+                    diagnostics.get("attempt"),
+                    diagnostics.get("attempts"),
+                    diagnostics.get("errno"),
+                    diagnostics.get("reason"),
+                    diagnostics.get("dns"),
                 )
-
-                cause_chain = (
-                    diagnostics.get(
-                        "causeChain"
-                    )
-                )
-
-                if cause_chain:
-
-                    logger.error(
-                        "MetaApi timeout cause chain: %s",
-                        cause_chain,
-                    )
 
                 if attempt < attempts:
 
@@ -1100,8 +1016,6 @@ class MT5Client:
                         delay,
                     )
 
-                    import time
-
                     time.sleep(delay)
 
                     continue
@@ -1109,10 +1023,6 @@ class MT5Client:
                 raise MetaApiError(
                     "MetaApi request timed out."
                 ) from exc
-
-            # =================================================================
-            # Network / transport failure
-            # =================================================================
 
             except httpx.RequestError as exc:
 
@@ -1137,31 +1047,16 @@ class MT5Client:
                     "MetaApi transport error: "
                     "host=%s scheme=%s port=%s "
                     "exception=%s attempt=%s/%s "
-                    "errno=%s reason=%s",
-                    diagnostics.get(
-                        "host"
-                    ),
-                    diagnostics.get(
-                        "scheme"
-                    ),
-                    diagnostics.get(
-                        "port"
-                    ),
-                    diagnostics.get(
-                        "exception"
-                    ),
-                    diagnostics.get(
-                        "attempt"
-                    ),
-                    diagnostics.get(
-                        "attempts"
-                    ),
-                    diagnostics.get(
-                        "errno"
-                    ),
-                    diagnostics.get(
-                        "reason"
-                    ),
+                    "errno=%s reason=%s dns=%s",
+                    diagnostics.get("host"),
+                    diagnostics.get("scheme"),
+                    diagnostics.get("port"),
+                    diagnostics.get("exception"),
+                    diagnostics.get("attempt"),
+                    diagnostics.get("attempts"),
+                    diagnostics.get("errno"),
+                    diagnostics.get("reason"),
+                    diagnostics.get("dns"),
                 )
 
                 cause_chain = (
@@ -1194,8 +1089,6 @@ class MT5Client:
                         delay,
                     )
 
-                    import time
-
                     time.sleep(delay)
 
                     continue
@@ -1203,10 +1096,6 @@ class MT5Client:
                 raise MetaApiError(
                     "Unable to reach MetaApi."
                 ) from exc
-
-            # =================================================================
-            # Unexpected transport-level exception
-            # =================================================================
 
             except Exception as exc:
 
@@ -1231,56 +1120,23 @@ class MT5Client:
                     "MetaApi unexpected transport exception: "
                     "host=%s scheme=%s port=%s "
                     "exception=%s attempt=%s/%s "
-                    "errno=%s reason=%s",
-                    diagnostics.get(
-                        "host"
-                    ),
-                    diagnostics.get(
-                        "scheme"
-                    ),
-                    diagnostics.get(
-                        "port"
-                    ),
-                    diagnostics.get(
-                        "exception"
-                    ),
-                    diagnostics.get(
-                        "attempt"
-                    ),
-                    diagnostics.get(
-                        "attempts"
-                    ),
-                    diagnostics.get(
-                        "errno"
-                    ),
-                    diagnostics.get(
-                        "reason"
-                    ),
+                    "errno=%s reason=%s dns=%s",
+                    diagnostics.get("host"),
+                    diagnostics.get("scheme"),
+                    diagnostics.get("port"),
+                    diagnostics.get("exception"),
+                    diagnostics.get("attempt"),
+                    diagnostics.get("attempts"),
+                    diagnostics.get("errno"),
+                    diagnostics.get("reason"),
+                    diagnostics.get("dns"),
                 )
 
-                cause_chain = (
-                    diagnostics.get(
-                        "causeChain"
-                    )
-                )
-
-                if cause_chain:
-
-                    logger.error(
-                        "MetaApi unexpected "
-                        "transport cause chain: %s",
-                        cause_chain,
-                    )
-
-                # Do not retry arbitrary programming/runtime errors.
                 raise MetaApiError(
                     "MetaApi transport failed."
                 ) from exc
 
         else:
-
-            # Defensive fallback. Normally one of the exception branches
-            # above raises before execution reaches this block.
 
             diagnostics = (
                 _build_transport_diagnostics(
@@ -1305,7 +1161,7 @@ class MT5Client:
             ) from last_exception
 
         # =====================================================================
-        # HTTP response errors
+        # HTTP errors
         # =====================================================================
 
         if response.status_code >= 400:
@@ -1313,7 +1169,6 @@ class MT5Client:
             payload: Any = None
 
             try:
-
                 payload = response.json()
 
             except ValueError:
@@ -1383,13 +1238,10 @@ class MT5Client:
                 ):
 
                     detail_code = (
-                        details.get(
-                            "code"
-                        )
+                        details.get("code")
                     )
 
                     if detail_code:
-
                         api_code = str(
                             detail_code
                         )
@@ -1397,9 +1249,7 @@ class MT5Client:
             self._set_error(
                 f"METAAPI_{api_code.upper()}",
                 message,
-                status_code=(
-                    response.status_code
-                ),
+                status_code=response.status_code,
                 details=details,
             )
 
@@ -1407,19 +1257,11 @@ class MT5Client:
                 message
             )
 
-        # =====================================================================
-        # Empty response
-        # =====================================================================
-
         if response.status_code == 204:
 
             self._clear_error()
 
             return None
-
-        # =====================================================================
-        # JSON response
-        # =====================================================================
 
         try:
 
@@ -1430,9 +1272,7 @@ class MT5Client:
             self._set_error(
                 "METAAPI_INVALID_RESPONSE",
                 "MetaApi returned invalid JSON.",
-                status_code=(
-                    response.status_code
-                ),
+                status_code=response.status_code,
             )
 
             raise MetaApiError(
@@ -1444,7 +1284,7 @@ class MT5Client:
         return payload
 
     # ========================================================================
-    # MetaApi provisioning
+    # Provisioning
     # ========================================================================
 
     def _provisioning_account(
@@ -1452,17 +1292,6 @@ class MT5Client:
     ) -> Optional[
         Dict[str, Any]
     ]:
-        """
-        Retrieve the MetaApi trading-account record.
-
-        Provides:
-        - state
-        - connectionStatus
-        - region
-        - broker/server
-        - login
-        - account type
-        """
 
         if not METAAPI_CONFIGURED:
             return None
@@ -1535,7 +1364,7 @@ class MT5Client:
         return metadata
 
     # ========================================================================
-    # MetaApi regional client
+    # Regional MetaApi
     # ========================================================================
 
     def _client_url(
@@ -1579,21 +1408,8 @@ class MT5Client:
         self,
         path: Optional[str] = None,
     ) -> bool:
-        """
-        Initialize the selected backend.
-
-        MetaApi initialization:
-        - validates credentials/account ID
-        - retrieves the account
-        - discovers its region
-        - verifies that the account is provisioned
-        """
 
         with self._lock:
-
-            # ----------------------------------------------------------------
-            # Disabled backend
-            # ----------------------------------------------------------------
 
             if self._backend == "disabled":
 
@@ -1609,20 +1425,13 @@ class MT5Client:
 
                 return False
 
-            # ----------------------------------------------------------------
-            # MetaApi backend
-            # ----------------------------------------------------------------
-
             if self._backend == "metaapi":
 
                 if not METAAPI_TOKEN:
 
                     self._set_error(
                         "METAAPI_TOKEN_MISSING",
-                        (
-                            "METAAPI_TOKEN is not "
-                            "configured."
-                        ),
+                        "METAAPI_TOKEN is not configured.",
                     )
 
                     self._initialized = False
@@ -1723,10 +1532,6 @@ class MT5Client:
 
                     return False
 
-            # ----------------------------------------------------------------
-            # Legacy Windows MetaTrader5
-            # ----------------------------------------------------------------
-
             if self._use_legacy():
 
                 try:
@@ -1806,28 +1611,14 @@ class MT5Client:
         password: Optional[str] = None,
         server: Optional[str] = None,
     ) -> bool:
-        """
-        Establish backend readiness.
-
-        MetaApi credentials are read from:
-            METAAPI_TOKEN
-            METAAPI_ACCOUNT_ID
-
-        The legacy login arguments remain accepted for compatibility.
-        """
 
         with self._lock:
-
-            # ----------------------------------------------------------------
-            # MetaApi
-            # ----------------------------------------------------------------
 
             if self._backend == "metaapi":
 
                 if not self._initialized:
 
                     if not self.initialize():
-
                         return False
 
                 try:
@@ -1837,7 +1628,6 @@ class MT5Client:
                     )
 
                     if not metadata:
-
                         return False
 
                     connection_status = str(
@@ -1928,10 +1718,6 @@ class MT5Client:
 
                     return False
 
-            # ----------------------------------------------------------------
-            # Legacy MetaTrader5
-            # ----------------------------------------------------------------
-
             if not self._use_legacy():
 
                 self._set_error(
@@ -1947,7 +1733,6 @@ class MT5Client:
             if not self._initialized:
 
                 if not self.initialize():
-
                     return False
 
             if (
@@ -1999,52 +1784,12 @@ class MT5Client:
 
                     return False
 
-                if isinstance(
-                    result,
-                    bool,
-                ):
-
-                    success = result
-
-                elif isinstance(
-                    result,
-                    (
-                        tuple,
-                        list,
-                    ),
-                ):
-
-                    success = (
-                        bool(result[0])
-                        if result
-                        else False
-                    )
-
-                elif isinstance(
-                    result,
-                    dict,
-                ):
-
-                    success = bool(
-                        result.get(
-                            "retcode",
-                            0,
-                        )
-                        == 0
-                    )
-
-                else:
-
-                    success = bool(
-                        result
-                    )
+                success = bool(result)
 
                 if success:
-
                     self._clear_error()
 
                 else:
-
                     self._set_error(
                         "MT5_LOGIN_FAILED",
                         "MetaTrader5 login failed.",
@@ -2073,31 +1818,19 @@ class MT5Client:
     def shutdown(
         self,
     ) -> bool:
-        """
-        Shutdown the selected backend.
-
-        MetaApi is a remote cloud service.
-
-        Shutdown closes only the local HTTP client. It does not undeploy,
-        delete or modify the MetaApi account.
-        """
 
         with self._lock:
 
             if self._backend == "metaapi":
 
                 self._initialized = False
-
                 self._account_metadata = None
-
                 self._region = None
-
                 self._last_error = None
 
                 if self._http is not None:
 
                     try:
-
                         self._http.close()
 
                     except Exception:
@@ -2108,7 +1841,6 @@ class MT5Client:
                         )
 
                     finally:
-
                         self._http = None
 
                 self._client_base_url = (
@@ -2120,7 +1852,6 @@ class MT5Client:
             if not self._use_legacy():
 
                 self._initialized = False
-
                 return True
 
             try:
@@ -2175,40 +1906,27 @@ class MT5Client:
             if metadata is None:
 
                 try:
-
                     metadata = (
                         self._refresh_account_metadata()
                     )
 
                 except MetaApiError:
-
                     return None
 
             if not metadata:
-
                 return None
 
             return {
                 "backend": "metaapi",
                 "accountId": METAAPI_ACCOUNT_ID,
-                "state": metadata.get(
-                    "state"
-                ),
+                "state": metadata.get("state"),
                 "connectionStatus": metadata.get(
                     "connectionStatus"
                 ),
-                "region": metadata.get(
-                    "region"
-                ),
-                "type": metadata.get(
-                    "type"
-                ),
-                "server": metadata.get(
-                    "server"
-                ),
-                "login": metadata.get(
-                    "login"
-                ),
+                "region": metadata.get("region"),
+                "type": metadata.get("type"),
+                "server": metadata.get("server"),
+                "login": metadata.get("login"),
                 "baseCurrency": metadata.get(
                     "baseCurrency"
                 ),
@@ -2224,7 +1942,6 @@ class MT5Client:
             }
 
         if not self._use_legacy():
-
             return None
 
         try:
@@ -2247,11 +1964,9 @@ class MT5Client:
     ) -> Optional[str]:
 
         if self._backend == "metaapi":
-
             return "MetaApi REST"
 
         if not self._use_legacy():
-
             return None
 
         try:
@@ -2284,15 +1999,12 @@ class MT5Client:
         if self._backend == "metaapi":
 
             return (
-                dict(
-                    self._last_error
-                )
+                dict(self._last_error)
                 if self._last_error
                 else None
             )
 
         if not self._use_legacy():
-
             return None
 
         try:
@@ -2301,25 +2013,13 @@ class MT5Client:
                 self._mt5.last_error()
             )
 
-            if isinstance(
-                last,
-                dict,
-            ):
-
-                return dict(last)
-
-            converted = _as_dict(
-                last
-            )
+            converted = _as_dict(last)
 
             if converted is not None:
-
                 return converted
 
             return (
-                {
-                    "error": str(last)
-                }
+                {"error": str(last)}
                 if last is not None
                 else None
             )
@@ -2328,7 +2028,7 @@ class MT5Client:
 
             logger.debug(
                 "mt5.last_error() raised.",
-                exc_info=True
+                exc_info=True,
             )
 
             return None
@@ -2361,7 +2061,6 @@ class MT5Client:
                     account,
                     dict,
                 ):
-
                     return account
 
                 self._set_error(
@@ -2376,11 +2075,9 @@ class MT5Client:
                 return None
 
             except MetaApiError:
-
                 return None
 
         if not self._use_legacy():
-
             return None
 
         try:
@@ -2423,7 +2120,6 @@ class MT5Client:
                 )
 
                 if not positions:
-
                     return []
 
                 if isinstance(
@@ -2451,11 +2147,9 @@ class MT5Client:
                 return []
 
             except MetaApiError:
-
                 return []
 
         if not self._use_legacy():
-
             return []
 
         try:
@@ -2465,7 +2159,6 @@ class MT5Client:
             )
 
             if not positions:
-
                 return []
 
             return [
@@ -2507,7 +2200,6 @@ class MT5Client:
                 )
 
                 if not symbols:
-
                     return []
 
                 if isinstance(
@@ -2515,15 +2207,10 @@ class MT5Client:
                     list,
                 ):
 
-                    # Preserve exact broker symbol names.
                     return [
                         {
-                            "name": str(
-                                symbol
-                            ),
-                            "symbol": str(
-                                symbol
-                            ),
+                            "name": str(symbol),
+                            "symbol": str(symbol),
                         }
                         for symbol in symbols
                         if (
@@ -2546,11 +2233,9 @@ class MT5Client:
                 return []
 
             except MetaApiError:
-
                 return []
 
         if not self._use_legacy():
-
             return []
 
         try:
@@ -2560,7 +2245,6 @@ class MT5Client:
             )
 
             if not symbols:
-
                 return []
 
             return [
@@ -2578,7 +2262,7 @@ class MT5Client:
             return []
 
     # ========================================================================
-    # Symbol specification
+    # Symbol information
     # ========================================================================
 
     def symbol_info(
@@ -2589,10 +2273,7 @@ class MT5Client:
     ]:
 
         if (
-            not isinstance(
-                symbol,
-                str,
-            )
+            not isinstance(symbol, str)
             or not symbol.strip()
         ):
 
@@ -2656,19 +2337,15 @@ class MT5Client:
                 return None
 
             except MetaApiError:
-
                 return None
 
         if not self._use_legacy():
-
             return None
 
         try:
 
             return _as_dict(
-                self._mt5.symbol_info(
-                    symbol
-                )
+                self._mt5.symbol_info(symbol)
             )
 
         except Exception:
@@ -2692,10 +2369,7 @@ class MT5Client:
     ]:
 
         if (
-            not isinstance(
-                symbol,
-                str,
-            )
+            not isinstance(symbol, str)
             or not symbol.strip()
         ):
 
@@ -2754,11 +2428,9 @@ class MT5Client:
                 return None
 
             except MetaApiError:
-
                 return None
 
         if not self._use_legacy():
-
             return None
 
         try:
@@ -2779,7 +2451,7 @@ class MT5Client:
             return None
 
     # ========================================================================
-    # History: deals
+    # History
     # ========================================================================
 
     def history_deals_get(
@@ -2811,24 +2483,18 @@ class MT5Client:
                     )
 
                     deals = (
-                        self._metaapi_get(
-                            path
-                        )
+                        self._metaapi_get(path)
                     )
 
                 else:
 
                     start = quote(
-                        _iso_datetime(
-                            from_dt
-                        ),
+                        _iso_datetime(from_dt),
                         safe="",
                     )
 
                     end = quote(
-                        _iso_datetime(
-                            to_dt
-                        ),
+                        _iso_datetime(to_dt),
                         safe="",
                     )
 
@@ -2894,11 +2560,9 @@ class MT5Client:
                 return result
 
             except MetaApiError:
-
                 return []
 
         if not self._use_legacy():
-
             return []
 
         try:
@@ -2933,7 +2597,6 @@ class MT5Client:
                 )
 
             if not deals:
-
                 return []
 
             return [
@@ -2949,10 +2612,6 @@ class MT5Client:
             )
 
             return []
-
-    # ========================================================================
-    # History: orders
-    # ========================================================================
 
     def history_orders_get(
         self,
@@ -2983,24 +2642,18 @@ class MT5Client:
                     )
 
                     orders = (
-                        self._metaapi_get(
-                            path
-                        )
+                        self._metaapi_get(path)
                     )
 
                 else:
 
                     start = quote(
-                        _iso_datetime(
-                            from_dt
-                        ),
+                        _iso_datetime(from_dt),
                         safe="",
                     )
 
                     end = quote(
-                        _iso_datetime(
-                            to_dt
-                        ),
+                        _iso_datetime(to_dt),
                         safe="",
                     )
 
@@ -3066,11 +2719,9 @@ class MT5Client:
                 return result
 
             except MetaApiError:
-
                 return []
 
         if not self._use_legacy():
-
             return []
 
         try:
@@ -3105,7 +2756,6 @@ class MT5Client:
                 )
 
             if not orders:
-
                 return []
 
             return [
