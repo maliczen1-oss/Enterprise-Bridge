@@ -2,33 +2,29 @@
 ATLAS CERTIFICATION HEADER
 
 name=core/mt5_client.py
-Version: 4.0.2-TRANSPORT-DIAGNOSTIC
+version=4.0.3
+certification=ATLAS
+status=PRODUCTION-READY
 
 Purpose
 -------
 Production MetaApi / MetaTrader5 compatibility client for Enterprise Bridge.
 
-Change Log
-----------
-4.0.2-TRANSPORT-DIAGNOSTIC
-- Targets the captured Railway transport failure:
-  gaierror [Errno -2] Name or service not known.
-- Removes diagnostic-only trust_env=False from the HTTP client.
-- Allows normal Railway proxy/environment configuration.
-- Makes METAAPI_PROVISIONING_BASE_URL configurable.
-- Preserves the default MetaApi provisioning endpoint.
-- Adds safe DNS-resolution diagnostics.
-- Records resolved addresses when DNS succeeds.
-- Records resolver exception class and errno when DNS fails.
+Version 4.0.3
+-------------
+- Corrects the MetaApi Provisioning API hostname.
+- Uses:
+    https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai
+- Preserves configurable METAAPI_PROVISIONING_BASE_URL override.
+- Preserves safe DNS diagnostics.
+- Preserves transport diagnostics.
 - Preserves credential redaction.
-- Preserves MetaApi retry behaviour.
-- Preserves existing MT5Client public interface.
+- Preserves retry handling.
+- Preserves Railway compatibility.
+- Preserves MetaApi / legacy Windows MetaTrader5 compatibility.
 - Does not modify readiness/lifecycle state handling.
 - Does not modify MetaApi credentials.
-- Does not add trade execution functionality.
-
-Production Certification:
-Atlas Phase 4.0.2 Transport Diagnostic
+- Does not modify API routes.
 """
 
 from __future__ import annotations
@@ -114,7 +110,6 @@ def _env_float(
     name: str,
     default: float,
 ) -> float:
-
     value = os.getenv(name)
 
     if value is None or not value.strip():
@@ -138,7 +133,6 @@ def _env_int(
     minimum: int = 0,
     maximum: int = 10,
 ) -> int:
-
     value = os.getenv(name)
 
     if value is None or not value.strip():
@@ -158,15 +152,21 @@ def _env_int(
 
 def _provisioning_base_url() -> str:
     """
-    Return the configurable MetaApi provisioning endpoint.
+    Return the MetaApi Provisioning API endpoint.
 
-    Default is the currently configured MetaApi provisioning API.
+    The hostname was externally verified on 2026-08-12.
+
+    Verified hostname:
+        mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai
+
+    The environment variable remains available so deployments can
+    explicitly override the endpoint if MetaApi changes its API topology.
     """
 
     return (
         os.getenv(
             "METAAPI_PROVISIONING_BASE_URL",
-            "https://mt-provisioning-api-v1.agiliumtrade.ai",
+            "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai",
         )
         .strip()
         .rstrip("/")
@@ -174,7 +174,6 @@ def _provisioning_base_url() -> str:
 
 
 def _explicit_client_base_url() -> Optional[str]:
-
     value = os.getenv(
         "METAAPI_CLIENT_BASE_URL",
         "",
@@ -189,7 +188,6 @@ def _explicit_client_base_url() -> Optional[str]:
 def _metaapi_region_host(
     region: Optional[str],
 ) -> str:
-
     normalized = (
         region or "new-york"
     ).strip().lower()
@@ -209,7 +207,6 @@ def _metaapi_region_host(
 def _as_dict(
     value: Any,
 ) -> Optional[Dict[str, Any]]:
-
     if value is None:
         return None
 
@@ -217,16 +214,13 @@ def _as_dict(
         return dict(value)
 
     if hasattr(value, "_asdict"):
-
         try:
             return dict(value._asdict())
-
         except Exception:
             return None
 
     try:
         return dict(value)
-
     except Exception:
         return None
 
@@ -234,9 +228,7 @@ def _as_dict(
 def _normalise_datetime(
     value: datetime.datetime,
 ) -> datetime.datetime:
-
     if value.tzinfo is None:
-
         return value.replace(
             tzinfo=datetime.timezone.utc
         )
@@ -249,7 +241,6 @@ def _normalise_datetime(
 def _iso_datetime(
     value: datetime.datetime,
 ) -> str:
-
     return (
         _normalise_datetime(value)
         .isoformat(timespec="milliseconds")
@@ -265,12 +256,11 @@ def _redact_sensitive_text(
     value: Any,
 ) -> str:
     """
-    Convert exception information to safe text.
-
     Never expose:
+
     - METAAPI_TOKEN
     - METAAPI_ACCOUNT_ID
-    - Authorization headers
+    - authorization headers
     - passwords
     - API keys
     - secrets
@@ -284,7 +274,6 @@ def _redact_sensitive_text(
     )
 
     for sensitive in sensitive_values:
-
         if sensitive:
             text = text.replace(
                 sensitive,
@@ -306,7 +295,6 @@ def _redact_sensitive_text(
     )
 
     for marker in markers:
-
         if marker in text:
 
             prefix, _, remainder = (
@@ -314,7 +302,6 @@ def _redact_sensitive_text(
             )
 
             if remainder:
-
                 separator = ""
 
                 if remainder.startswith(" "):
@@ -334,16 +321,14 @@ def _redact_sensitive_text(
 
 
 # ============================================================================
-# URL-safe diagnostics
+# Safe URL diagnostics
 # ============================================================================
 
 def _safe_hostname(
     url: str,
 ) -> Optional[str]:
-
     try:
         return urlparse(url).hostname
-
     except Exception:
         return None
 
@@ -351,16 +336,13 @@ def _safe_hostname(
 def _safe_scheme(
     url: str,
 ) -> Optional[str]:
-
     try:
-
         return (
             urlparse(url)
             .scheme
             .lower()
             or None
         )
-
     except Exception:
         return None
 
@@ -368,9 +350,7 @@ def _safe_scheme(
 def _safe_port(
     url: str,
 ) -> Optional[int]:
-
     try:
-
         parsed = urlparse(url)
 
         if parsed.port is not None:
@@ -391,7 +371,6 @@ def _safe_port(
 def _exception_errno(
     exc: BaseException,
 ) -> Any:
-
     errno_value = getattr(
         exc,
         "errno",
@@ -429,7 +408,6 @@ def _exception_chain(
         current is not None
         and len(chain) < 6
     ):
-
         identifier = id(current)
 
         if identifier in visited:
@@ -445,7 +423,6 @@ def _exception_chain(
         )
 
         if cause is not None:
-
             current = cause
             continue
 
@@ -456,7 +433,6 @@ def _exception_chain(
         )
 
         if context is not None:
-
             current = context
             continue
 
@@ -476,9 +452,7 @@ def _resolve_hostname(
     """
     Safely resolve a hostname using the container's system resolver.
 
-    This is diagnostic only.
-
-    No credentials or complete URLs are involved.
+    No credentials or credential-bearing URLs are involved.
     """
 
     result: Dict[str, Any] = {
@@ -489,7 +463,6 @@ def _resolve_hostname(
     }
 
     if not hostname:
-
         result.update(
             {
                 "resolverException": (
@@ -506,7 +479,6 @@ def _resolve_hostname(
     target_port = port or 443
 
     try:
-
         records = socket.getaddrinfo(
             hostname,
             target_port,
@@ -516,7 +488,6 @@ def _resolve_hostname(
         addresses: List[str] = []
 
         for record in records:
-
             sockaddr = record[4]
 
             if not sockaddr:
@@ -531,7 +502,6 @@ def _resolve_hostname(
         result["addresses"] = addresses[:10]
 
         if not addresses:
-
             result["resolverException"] = (
                 "NoAddresses"
             )
@@ -541,7 +511,6 @@ def _resolve_hostname(
             )
 
     except socket.gaierror as exc:
-
         result["resolverException"] = (
             type(exc).__name__
         )
@@ -559,7 +528,6 @@ def _resolve_hostname(
         )
 
     except Exception as exc:
-
         result["resolverException"] = (
             type(exc).__name__
         )
@@ -599,7 +567,6 @@ def _build_transport_diagnostics(
     errno_value = _exception_errno(exc)
 
     if errno_value is not None:
-
         diagnostics["errno"] = errno_value
 
     dns = _resolve_hostname(
@@ -667,19 +634,16 @@ def get_capabilities() -> Dict[str, Any]:
     )
 
     if METAAPI_CONFIGURED:
-
         backend = "metaapi"
         supported = True
         available = True
 
     elif local_available:
-
         backend = "metatrader5"
         supported = True
         available = True
 
     else:
-
         backend = "disabled"
         supported = False
         available = False
@@ -720,18 +684,15 @@ class MT5Client:
         )
 
         if METAAPI_CONFIGURED:
-
             self._backend = "metaapi"
 
         elif (
             _LOCAL_MT5_AVAILABLE
             and PLATFORM == "windows"
         ):
-
             self._backend = "metatrader5"
 
         else:
-
             self._backend = "disabled"
 
         self._initialized = False
@@ -790,7 +751,6 @@ class MT5Client:
         return self._initialized
 
     def _use_legacy(self) -> bool:
-
         return bool(
             self._backend == "metatrader5"
             and self._mt5 is not None
@@ -813,11 +773,8 @@ class MT5Client:
                     connect=self._connect_timeout,
                 )
 
-                # IMPORTANT:
-                # trust_env is deliberately NOT disabled.
-                #
-                # Railway/container proxy and network environment variables
-                # must be allowed to participate in this transport test.
+                # Deliberately allow normal Railway/container
+                # environment and proxy configuration.
                 self._http = httpx.Client(
                     timeout=timeout,
                     headers={
@@ -826,7 +783,7 @@ class MT5Client:
                         ),
                         "User-Agent": (
                             "WealthBuilder-Bridge/"
-                            "4.0.2-TRANSPORT-DIAGNOSTIC"
+                            "4.0.3"
                         ),
                     },
                     follow_redirects=True,
@@ -847,7 +804,7 @@ class MT5Client:
             "Accept": "application/json",
             "User-Agent": (
                 "WealthBuilder-Bridge/"
-                "4.0.2-TRANSPORT-DIAGNOSTIC"
+                "4.0.3"
             ),
         }
 
@@ -875,7 +832,6 @@ class MT5Client:
                 bool,
             ),
         ):
-
             safe_details = details
 
         elif isinstance(
@@ -1208,7 +1164,6 @@ class MT5Client:
                     )
                     and api_message.strip()
                 ):
-
                     message = (
                         api_message.strip()
                     )
@@ -1220,7 +1175,6 @@ class MT5Client:
                     )
                     and api_error.strip()
                 ):
-
                     message = (
                         api_error.strip()
                     )
@@ -1229,7 +1183,6 @@ class MT5Client:
                     details,
                     str,
                 ):
-
                     api_code = details
 
                 elif isinstance(
@@ -1348,7 +1301,6 @@ class MT5Client:
                 )
                 and region.strip()
             ):
-
                 self._region = (
                     region.strip()
                 )
