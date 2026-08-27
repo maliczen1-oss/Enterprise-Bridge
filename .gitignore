@@ -47,3 +47,12 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Python runtime/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+coverage.xml
+
+# Locally generated certification evidence (canonical copies live outside Git)
+artifacts/
