@@ -5,7 +5,7 @@ from httpx import AsyncClient
 from bridge.app import app
 from config import settings
 
-AUTH_HEADER = {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
+AUTH_HEADER = {"Authorization": "Bearer test-token"}
 
 
 @pytest.mark.asyncio

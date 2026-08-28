@@ -5,11 +5,13 @@ from httpx import AsyncClient
 
 from bridge.app import app
 
+AUTH_HEADER = {"Authorization": "Bearer test-token"}
+
 
 @pytest.mark.asyncio
 async def test_history_invalid_iso_dates(mock_manager_connected):
     async with AsyncClient(app=app, base_url="http://test") as ac:
-        r = await ac.get("/api/history?start=not-a-date&end=also-bad")
+        r = await ac.get("/api/history?start=not-a-date&end=also-bad", headers=AUTH_HEADER)
     assert r.status_code == 400
     body = r.json()
     assert body["error"]["code"] == "INVALID_DATE"
@@ -21,7 +23,7 @@ async def test_history_start_after_end(mock_manager_connected):
     start = (now + datetime.timedelta(days=1)).isoformat()
     end = now.isoformat()
     async with AsyncClient(app=app, base_url="http://test") as ac:
-        r = await ac.get(f"/api/history?start={start}&end={end}")
+        r = await ac.get("/api/history", params={"start": start, "end": end}, headers=AUTH_HEADER)
     assert r.status_code == 400
     body = r.json()
     assert body["error"]["code"] == "INVALID_DATE_RANGE"
@@ -33,7 +35,7 @@ async def test_history_range_too_large(mock_manager_connected):
     start = (now - datetime.timedelta(days=365)).isoformat()
     end = now.isoformat()
     async with AsyncClient(app=app, base_url="http://test") as ac:
-        r = await ac.get(f"/api/history?start={start}&end={end}")
+        r = await ac.get("/api/history", params={"start": start, "end": end}, headers=AUTH_HEADER)
     assert r.status_code == 400
     body = r.json()
     assert body["error"]["code"] == "RANGE_TOO_LARGE"
@@ -46,7 +48,11 @@ async def test_history_limit_exceeded(mock_manager_connected):
     end = now.isoformat()
     # Use an excessively large limit to trigger LIMIT_EXCEEDED
     async with AsyncClient(app=app, base_url="http://test") as ac:
-        r = await ac.get(f"/api/history?start={start}&end={end}&limit=1000000")
+        r = await ac.get(
+            "/api/history",
+            params={"start": start, "end": end, "limit": 1000000},
+            headers=AUTH_HEADER,
+        )
     assert r.status_code == 400
     body = r.json()
     assert body["error"]["code"] == "LIMIT_EXCEEDED"

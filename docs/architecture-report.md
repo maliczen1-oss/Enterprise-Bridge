@@ -1,5 +1,7 @@
 # Architecture Report — WealthBuilder Bridge Phase 2.1
 
+> Historical baseline: this report describes Phase 2.1 stubs and is not the current runtime architecture. See the repository README and founder operations runbook.
+
 ## Overview
 
 The WealthBuilder Bridge is a standalone FastAPI application whose sole

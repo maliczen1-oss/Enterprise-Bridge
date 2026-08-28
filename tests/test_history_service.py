@@ -1,5 +1,6 @@
-import datetime
-import logging
+from __future__ import annotations
+
+import datetime as dt
 
 import pytest
 
@@ -7,275 +8,87 @@ from services import history_service
 
 
 @pytest.fixture(autouse=True)
-def enable_logging(caplog):
-    caplog.set_level(logging.DEBUG)
-    yield
+def connected_manager(monkeypatch):
+    monkeypatch.setattr(history_service.connection_manager, "get_state", lambda: "CONNECTED")
+    monkeypatch.setattr(history_service.connection_manager, "get_last_error", lambda: None)
 
 
-def now():
-    return datetime.datetime.utcnow()
+def window():
+    end = dt.datetime.now(dt.timezone.utc)
+    return end - dt.timedelta(days=1), end
 
 
-def test_empty_history(monkeypatch):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [],
+def set_history(monkeypatch, deals=None, orders=None):
+    monkeypatch.setattr(history_service.connection_manager, "fetch_history_deals", lambda *args, **kwargs: deals)
+    monkeypatch.setattr(history_service.connection_manager, "fetch_history_orders", lambda *args, **kwargs: orders)
+
+
+@pytest.mark.parametrize("deals,orders", [([], []), (None, None)])
+def test_empty_upstream_history_is_valid(monkeypatch, deals, orders):
+    set_history(monkeypatch, deals, orders)
+    assert history_service.get_history(*window()) == {"deals": [], "orders": []}
+
+
+def test_records_are_normalized_without_losing_broker_fields(monkeypatch):
+    set_history(
+        monkeypatch,
+        deals=[{"ticket": 100, "symbol": "EURUSD.a", "profit": 50, "time": 1_700_000_000, "broker_fact": "kept"}],
+        orders=[{"ticket": 200, "symbol": "GBPUSD", "volume": 0.1, "time_setup": 1_700_000_100}],
     )
+    result = history_service.get_history(*window())
+    assert result["deals"][0]["ticket"] == 100
+    assert result["deals"][0]["symbol"] == "EURUSD.a"
+    assert result["deals"][0]["broker_fact"] == "kept"
+    assert result["deals"][0]["record_id"]
+    assert result["orders"][0]["ticket"] == 200
+    assert result["orders"][0]["record_id"]
 
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
+
+def test_invalid_entries_are_ignored_and_duplicates_removed(monkeypatch):
+    deal = {"ticket": 1, "symbol": "EURUSD", "time": 1_700_000_000}
+    set_history(monkeypatch, deals=["bad", 123, deal, dict(deal)], orders=[])
+    result = history_service.get_history(*window())
+    assert len(result["deals"]) == 1
+    assert result["deals"][0]["ticket"] == 1
+
+
+def test_limit_applies_across_both_collections(monkeypatch):
+    set_history(
+        monkeypatch,
+        deals=[{"ticket": 1, "time": 100}, {"ticket": 2, "time": 300}],
+        orders=[{"ticket": 3, "time_setup": 200}],
     )
-
-    result = history_service.get_history(now(), now())
-
-    assert result == {
-        "deals": [],
-        "orders": [],
-    }
+    result = history_service.get_history(*window(), limit=2)
+    assert len(result["deals"]) + len(result["orders"]) == 2
 
 
-def test_none_history(monkeypatch):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: None,
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: None,
-    )
-
-    result = history_service.get_history(now(), now())
-
-    assert result["deals"] == []
-    assert result["orders"] == []
+def test_disconnected_manager_is_rejected(monkeypatch):
+    monkeypatch.setattr(history_service.connection_manager, "get_state", lambda: "FAILED")
+    set_history(monkeypatch, [], [])
+    with pytest.raises(RuntimeError, match="not connected"):
+        history_service.get_history(*window())
 
 
-def test_deal_normalization(monkeypatch):
-    deals = [
-        {
-            "ticket": 100,
-            "symbol": "EURUSD",
-            "profit": 50,
-            "commission": -2,
-            "swap": 1,
-            "comment": "deal",
-            "time_done": 12345,
-        }
-    ]
+@pytest.mark.parametrize("collection", ["deals", "orders"])
+def test_upstream_failure_is_not_misreported_as_empty_history(monkeypatch, collection):
+    def fail(*args, **kwargs):
+        raise OSError("broker unavailable")
 
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: deals,
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(now(), now())
-
-    deal = result["deals"][0]
-
-    assert deal["ticket"] == 100
-    assert deal["symbol"] == "EURUSD"
-    assert deal["profit"] == 50
-    assert deal["commission"] == -2
-    assert deal["swap"] == 1
-    assert deal["comment"] == "deal"
-    assert deal["close_time"] == 12345
+    set_history(monkeypatch, [], [])
+    monkeypatch.setattr(history_service.connection_manager, f"fetch_history_{collection}", fail)
+    with pytest.raises(RuntimeError, match=f"historical {collection}"):
+        history_service.get_history(*window())
 
 
-def test_order_normalization(monkeypatch):
-    orders = [
-        {
-            "ticket": 200,
-            "symbol": "GBPUSD",
-            "profit": 25,
-            "commission": -1,
-            "swap": 0,
-            "comment": "order",
-            "time": 98765,
-        }
-    ]
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [],
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: orders,
-    )
-
-    result = history_service.get_history(now(), now())
-
-    order = result["orders"][0]
-
-    assert order["ticket"] == 200
-    assert order["symbol"] == "GBPUSD"
-    assert order["profit"] == 25
-    assert order["commission"] == -1
-    assert order["swap"] == 0
-    assert order["comment"] == "order"
-    assert order["close_time"] == 98765
-
-
-def test_limit_is_applied(monkeypatch):
-    deals = [
-        {"ticket": 1},
-        {"ticket": 2},
-        {"ticket": 3},
-    ]
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: deals,
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(
-        now(),
-        now(),
-        limit=2,
-    )
-
-    assert len(result["deals"]) == 2
-
-
-def test_non_dict_entries(monkeypatch):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [
-            "bad",
-            123,
-            {"ticket": 1},
-        ],
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(now(), now())
-
-    assert result["deals"][0] == {}
-    assert result["deals"][1] == {}
-    assert result["deals"][2]["ticket"] == 1
-
-
-def test_missing_fields(monkeypatch):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [
-            {}
-        ],
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(now(), now())
-
-    deal = result["deals"][0]
-
-    expected = {
-        "ticket",
-        "symbol",
-        "profit",
-        "commission",
-        "swap",
-        "comment",
-        "close_time",
-    }
-
-    assert set(deal.keys()) == expected
-
-
-def test_deals_exception(monkeypatch, caplog):
-    def raise_error(*args, **kwargs):
-        raise RuntimeError("Boom")
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        raise_error,
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(now(), now())
-
-    assert result["deals"] == []
-    assert "Failed to fetch history deals" in caplog.text
-
-
-def test_orders_exception(monkeypatch, caplog):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [],
-    )
-
-    def raise_error(*args, **kwargs):
-        raise RuntimeError("Boom")
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        raise_error,
-    )
-
-    result = history_service.get_history(now(), now())
-
-    assert result["orders"] == []
-    assert "Failed to fetch history orders" in caplog.text
-
-
-def test_return_schema(monkeypatch):
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_deals",
-        lambda *args, **kwargs: [],
-    )
-
-    monkeypatch.setattr(
-        history_service.connection_manager,
-        "fetch_history_orders",
-        lambda *args, **kwargs: [],
-    )
-
-    result = history_service.get_history(now(), now())
-
-    assert set(result.keys()) == {
-        "deals",
-        "orders",
-    }
+@pytest.mark.parametrize(
+    "start,end,kwargs",
+    [
+        ("bad", dt.datetime.now(dt.timezone.utc), {}),
+        (dt.datetime.now(dt.timezone.utc), "bad", {}),
+        (dt.datetime.now(dt.timezone.utc), dt.datetime.now(dt.timezone.utc), {"ticket": 0}),
+        (dt.datetime.now(dt.timezone.utc), dt.datetime.now(dt.timezone.utc), {"symbol": " "}),
+    ],
+)
+def test_invalid_inputs_are_rejected(start, end, kwargs):
+    with pytest.raises(ValueError):
+        history_service.get_history(start, end, **kwargs)

@@ -5,15 +5,12 @@ from httpx import AsyncClient
 
 from bridge.app import app
 from config import settings
-from core.logging import configure_logging
 
-AUTH_HEADER = {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
+AUTH_HEADER = {"Authorization": "Bearer test-token"}
 
 
 @pytest.mark.asyncio
 async def test_request_id_in_logs_and_response(caplog, mock_manager_connected):
-    # Ensure structured logging is configured for the test process
-    configure_logging("DEBUG")
     caplog.set_level(logging.INFO, logger="bridge")
 
     async with AsyncClient(app=app, base_url="http://test") as ac:

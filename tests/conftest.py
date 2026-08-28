@@ -1,16 +1,69 @@
 # tests/conftest.py
 import pytest
+import pytest_asyncio
 import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 import logging
 import platform
+from httpx import ASGITransport, AsyncClient
 
 import core.connection_manager as cm_module
 from config import settings
 
-# Silence bridge logger during tests unless a test explicitly asserts logs
-logging.getLogger("bridge").setLevel(logging.CRITICAL)
+
+class _ManagerProxy:
+    """Keep imported manager aliases pointed at the test-selected manager.
+
+    Runtime modules import ``manager`` by value.  Tests replace
+    ``core.connection_manager.manager`` with a fake, so a small delegating
+    proxy keeps the API and service aliases synchronized without changing
+    production code.
+    """
+
+    def __getattr__(self, name):
+        return getattr(cm_module.manager, name)
+
+
+@pytest.fixture(autouse=True)
+def patch_imported_manager_aliases(monkeypatch):
+    proxy = _ManagerProxy()
+    modules = [
+        "app",
+        "api.health",
+        "api.account",
+        "api.positions",
+        "api.symbols",
+        "api.market",
+        "api.trade",
+        "services.account_service",
+        "services.position_service",
+        "services.symbol_service",
+        "services.market_service",
+        "services.history_service",
+    ]
+    import importlib
+    for module_name in modules:
+        module = importlib.import_module(module_name)
+        if hasattr(module, "connection_manager"):
+            monkeypatch.setattr(module, "connection_manager", proxy)
+    yield
+
+
+@pytest_asyncio.fixture
+async def client():
+    """Modern async ASGI client shared by endpoint tests."""
+    from bridge.app import app
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as ac:
+        yield ac
+
+# Let caplog select the level per test; globally forcing CRITICAL hides the
+# INFO/DEBUG behavior that the service tests intentionally verify.
+logging.getLogger("bridge").setLevel(logging.NOTSET)
 
 
 @pytest.fixture(autouse=True)

@@ -2,7 +2,7 @@
 
 **Version:** 2.1.0  
 **API Version:** v1  
-**Status:** FROZEN — Phase 2.1  
+**Status:** HISTORICAL — Phase 2.1 baseline. The runtime contract has evolved; use the generated `/openapi.json`, the repository README, and `FOUNDER-OPERATIONS-RUNBOOK.md` for the current release.
 **Effective date:** 2026-07-14  
 
 ---
