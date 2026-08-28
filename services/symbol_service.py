@@ -7,6 +7,13 @@ from core.connection_manager import manager as connection_manager
 logger = logging.getLogger("bridge")
 
 
+def _first_present(source: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in source and source[key] is not None:
+            return source[key]
+    return None
+
+
 def get_symbols() -> List[Dict[str, Any]]:
     """
     Return available symbols with requested attributes.
@@ -29,14 +36,14 @@ def get_symbols() -> List[Dict[str, Any]]:
             logger.debug("Skipping non-dict symbol entry: %r", s)
             continue
         sym = {
-            "name": s.get("name") or s.get("symbol"),
+            "name": _first_present(s, "name", "symbol"),
             "visible": s.get("visible") if s.get("visible") is not None else True,
-            "trade_mode": s.get("trade_mode") or s.get("trade"),
+            "trade_mode": _first_present(s, "trade_mode", "trade"),
             "digits": s.get("digits"),
             "point": s.get("point"),
             "spread": s.get("spread"),
-            "contract_size": s.get("contract_size") or s.get("lot_size"),
-            "currency": s.get("currency_base") or s.get("currency"),
+            "contract_size": _first_present(s, "contract_size", "lot_size"),
+            "currency": _first_present(s, "currency", "currency_base"),
         }
         out.append(sym)
     return out
