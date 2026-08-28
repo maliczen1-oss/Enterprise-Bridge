@@ -29,6 +29,26 @@ function Convert-ToNullableNumber([object]$Value) {
     return [double]$Value
 }
 
+function Convert-ToPositionSide([object]$Value) {
+    $normalized = ([string]$Value).Trim().ToUpperInvariant()
+    if ($normalized -in @("0", "BUY", "POSITION_TYPE_BUY")) { return "BUY" }
+    if ($normalized -in @("1", "SELL", "POSITION_TYPE_SELL")) { return "SELL" }
+    throw "Position direction is not recognized; snapshot publication stopped."
+}
+
+function Convert-ToIsoTimestamp([object]$Value) {
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { return $null }
+    $unixSeconds = 0L
+    if ([long]::TryParse([string]$Value, [ref]$unixSeconds)) {
+        return [DateTimeOffset]::FromUnixTimeSeconds($unixSeconds).UtcDateTime.ToString("o")
+    }
+    $timestamp = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse([string]$Value, [ref]$timestamp)) {
+        return $timestamp.UtcDateTime.ToString("o")
+    }
+    throw "Position opening time is not recognized; snapshot publication stopped."
+}
+
 function Publish-Snapshot {
     $health = Invoke-RestMethod -Uri "$BridgeUrl/health" -Method Get -TimeoutSec 10
     if (-not $health.success -or $health.data.connectionState -ne "CONNECTED") {
@@ -41,21 +61,17 @@ function Publish-Snapshot {
     }
 
     $positions = @($positionsResponse.data | ForEach-Object {
-        $openedAt = $null
-        if ($null -ne $_.time) {
-            $openedAt = [DateTimeOffset]::FromUnixTimeSeconds([long]$_.time).UtcDateTime.ToString("o")
-        }
         [ordered]@{
             ticket       = [string]$_.ticket
             symbol       = [string]$_.symbol
-            side         = if ([string]$_.type -in @("0", "BUY", "buy")) { "BUY" } else { "SELL" }
+            side         = Convert-ToPositionSide $_.type
             volume       = [double]$_.volume
             priceOpen    = [double]$_.price_open
             priceCurrent = Convert-ToNullableNumber $_.price_current
             profit       = Convert-ToNullableNumber $_.profit
-            stopLoss     = $null
-            takeProfit   = $null
-            openedAt     = $openedAt
+            stopLoss     = Convert-ToNullableNumber $_.stop_loss
+            takeProfit   = Convert-ToNullableNumber $_.take_profit
+            openedAt     = Convert-ToIsoTimestamp $_.time
         }
     })
 

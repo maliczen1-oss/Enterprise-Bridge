@@ -44,6 +44,8 @@ def get_positions() -> List[Dict[str, Any]]:
             "volume": _first_present(p, "volume", "lots", "lot_size"),
             "price_open": _first_present(p, "price_open", "open_price", "price"),
             "price_current": _first_present(p, "price", "current_price", "price_current"),
+            "stop_loss": _first_present(p, "sl", "stop_loss", "stopLoss"),
+            "take_profit": _first_present(p, "tp", "take_profit", "takeProfit"),
             "swap": p.get("swap"),
             "profit": p.get("profit"),
             "comment": p.get("comment"),
