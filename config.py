@@ -10,35 +10,51 @@ Production Certification: Phase 3.3
 """
 
 # config.py
-from pydantic import Field, field_validator, ConfigDict
-from pydantic_settings import BaseSettings
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 class Settings(BaseSettings):
-    HOST: str = Field("0.0.0.0", env="HOST")
-    PORT: int = Field(8000, env="PORT")
-    ENVIRONMENT: str = Field(..., env="ENVIRONMENT")
-    API_VERSION: str = Field(..., env="API_VERSION")
-    LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
-    AUTH_TOKEN: str = Field(..., env="AUTH_TOKEN")
-    REQUEST_TIMEOUT: int = Field(30, env="REQUEST_TIMEOUT")
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
+    ENVIRONMENT: str
+    API_VERSION: str
+    LOG_LEVEL: str = "INFO"
+    AUTH_TOKEN: str
+    REQUEST_TIMEOUT: int = 30
 
     # MT5 specific
-    MT5_LOGIN: Optional[int] = Field(None, env="MT5_LOGIN")
-    MT5_PASSWORD: Optional[str] = Field(None, env="MT5_PASSWORD")
-    MT5_SERVER: Optional[str] = Field(None, env="MT5_SERVER")
-    MT5_TERMINAL_PATH: Optional[str] = Field(None, env="MT5_TERMINAL_PATH")
-    MT5_TIMEOUT: int = Field(30000, env="MT5_TIMEOUT")
+    MT5_LOGIN: Optional[int] = None
+    MT5_PASSWORD: Optional[str] = None
+    MT5_SERVER: Optional[str] = None
+    MT5_TERMINAL_PATH: Optional[str] = None
+    MT5_TIMEOUT: int = 30000
+    MT5_CONNECTION_TIMEOUT: int = 30000
+    MT5_RETRY_BASE_DELAY: float = 1.0
+    MT5_RETRY_MAX_DELAY: float = 60.0
+    MT5_MAX_RETRIES: int = 10
 
     # Operational flags
-    BROKER_TRADING_ENABLED: bool = Field(False, env="BROKER_TRADING_ENABLED")
+    BROKER_TRADING_ENABLED: bool = False
 
-    model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
     @field_validator("ENVIRONMENT")
     def validate_env(cls, v):
         if v not in ("development", "staging", "production"):
             raise ValueError("ENVIRONMENT must be one of development, staging, production")
         return v
+
+    @field_validator("AUTH_TOKEN")
+    @classmethod
+    def validate_auth_token(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("AUTH_TOKEN must not be empty")
+        return value
 
 settings = Settings()
