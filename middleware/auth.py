@@ -16,6 +16,7 @@ Production Certification: Phase 3.2
 from __future__ import annotations
 
 import logging
+import hmac
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -85,7 +86,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # Support both older lowercase attribute and canonical uppercase name to be robust
         expected = getattr(settings, "AUTH_TOKEN", None) or getattr(settings, "auth_token", None)
 
-        if token != expected:
+        if not expected or not hmac.compare_digest(token, expected):
             logger.warning(
                 "Rejected request with invalid token.",
                 extra={"path": request.url.path, "method": request.method, "requestId": get_request_id()},

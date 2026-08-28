@@ -53,6 +53,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 coverage.xml
+.coverage
+.venv/
+tests/results/
 .env
 
 # Locally generated certification evidence (canonical copies live outside Git)
