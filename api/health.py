@@ -63,22 +63,6 @@ async def health(request: Request):
         terminal_version = cm_health.get("terminalVersion") or caps.get("terminalVersion")
         server = getattr(settings, "MT5_SERVER", None)
 
-        # Account summary: attempt a safe read-only fetch when connected
-        account_summary = None
-        try:
-            if connection_state == "CONNECTED":
-                acct = connection_manager.fetch_account()
-                if acct:
-                    # Do not expose secrets; include safe fields only if present
-                    account_summary = {
-                        "login": acct.get("login") if isinstance(acct, dict) else None,
-                        "balance": acct.get("balance") if isinstance(acct, dict) else None,
-                        "currency": acct.get("currency") if isinstance(acct, dict) else None,
-                    }
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug("Non-fatal account read failed for health: %s", e)
-            account_summary = None
-
         # Last error and reconnect metadata
         last_error = cm_health.get("lastError") or caps.get("lastError")
         reconnect_count = int(cm_health.get("reconnectCount") or 0)
@@ -93,7 +77,6 @@ async def health(request: Request):
             "broker": os.environ.get("BROKER_PROVIDER", "bridge"),
             "server": server,
             "terminalVersion": terminal_version,
-            "account": account_summary,
             "lastError": last_error,
             "reconnectCount": reconnect_count,
             "lastReconnect": last_reconnect,
