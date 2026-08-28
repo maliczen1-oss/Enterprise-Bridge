@@ -1,5 +1,7 @@
 # Validation Report — WealthBuilder Bridge Phase 2.1
 
+> Historical evidence only. These Phase 2.1 stub expectations have been superseded by the authenticated read-only founder release and must not be used as current certification evidence.
+
 All Phase 2.1 acceptance criteria verified.  Test command:
 
 ```bash

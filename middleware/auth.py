@@ -16,6 +16,8 @@ Production Certification: Phase 3.2
 from __future__ import annotations
 
 import logging
+import hmac
+import uuid
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -49,11 +51,10 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        # Ensure we have a request id set for logging and error envelopes. If the
-        # RequestIDMiddleware (registered earlier) has already set it, this is a no-op.
-        rid = request.headers.get("X-Request-Id")
-        if rid:
-            set_request_id(rid)
+        # Authentication may run before the request-ID middleware because of
+        # Starlette's middleware wrapping order, so fail safely with our own ID.
+        rid = request.headers.get("X-Request-Id") or get_request_id() or str(uuid.uuid4())
+        set_request_id(rid)
 
         if self._is_exempt(request.url.path):
             return await call_next(request)
@@ -71,7 +72,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content=error_response(
-                    request_id=get_request_id(),
+                    request_id=rid,
                     code="AUTHENTICATION_FAILED",
                     message=(
                         "Missing or malformed Authorization header. "
@@ -85,7 +86,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         # Support both older lowercase attribute and canonical uppercase name to be robust
         expected = getattr(settings, "AUTH_TOKEN", None) or getattr(settings, "auth_token", None)
 
-        if token != expected:
+        if not expected or not hmac.compare_digest(token, expected):
             logger.warning(
                 "Rejected request with invalid token.",
                 extra={"path": request.url.path, "method": request.method, "requestId": get_request_id()},
@@ -93,7 +94,7 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=401,
                 content=error_response(
-                    request_id=get_request_id(),
+                    request_id=rid,
                     code="AUTHENTICATION_FAILED",
                     message="Invalid bearer token.",
                 ),

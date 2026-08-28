@@ -87,8 +87,8 @@ class ConnectionManager:
 
     def _is_legal_transition(self, prev: ConnectionState, new: ConnectionState) -> bool:
         allowed = {
-            ConnectionState.DISCONNECTED: {ConnectionState.INITIALIZING, ConnectionState.SHUTTING_DOWN, ConnectionState.UNSUPPORTED_PLATFORM, ConnectionState.BACKEND_UNAVAILABLE},
-            ConnectionState.INITIALIZING: {ConnectionState.CONNECTING, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN},
+            ConnectionState.DISCONNECTED: {ConnectionState.INITIALIZING, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN, ConnectionState.UNSUPPORTED_PLATFORM, ConnectionState.BACKEND_UNAVAILABLE},
+            ConnectionState.INITIALIZING: {ConnectionState.CONNECTING, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN, ConnectionState.DISCONNECTED},
             ConnectionState.CONNECTING: {ConnectionState.CONNECTED, ConnectionState.FAILED, ConnectionState.SHUTTING_DOWN},
             ConnectionState.CONNECTED: {ConnectionState.SHUTTING_DOWN, ConnectionState.DISCONNECTED, ConnectionState.FAILED},
             ConnectionState.FAILED: {ConnectionState.INITIALIZING, ConnectionState.SHUTTING_DOWN, ConnectionState.DISCONNECTED},
@@ -167,6 +167,20 @@ class ConnectionManager:
         MT5 exceptions.
         """
         try:
+            # Own the complete connection transition so this operation is
+            # correct both from the worker loop and when invoked directly by
+            # diagnostics.  The previous implementation relied on `_run()` to
+            # set INITIALIZING first, which allowed a successful direct call to
+            # return True while the public state remained DISCONNECTED.
+            with self._lock:
+                if self._state in (ConnectionState.DISCONNECTED, ConnectionState.FAILED):
+                    self._set_state(ConnectionState.INITIALIZING)
+                elif self._state != ConnectionState.INITIALIZING:
+                    self._record_error(
+                        "MT5_CONNECTION_STATE_INVALID",
+                        f"Cannot connect while state is {self._state.value}",
+                    )
+                    return False
             logger.info("Attempting MT5 initialize")
             path = getattr(settings, "MT5_TERMINAL_PATH", None) or None
             initialized = False
@@ -188,6 +202,7 @@ class ConnectionManager:
                     msg += f" - {last}"
                 self._mt5_initialized = False
                 self._record_error("MT5_INITIALIZE_FAILED", msg)
+                self._set_state(ConnectionState.DISCONNECTED)
                 return False
 
             # Mark initialized
@@ -308,6 +323,17 @@ class ConnectionManager:
 
     def restart(self) -> None:
         with self._lock:
+            if (
+                self._worker_thread
+                and self._worker_thread.is_alive()
+                and self._state in (
+                    ConnectionState.DISCONNECTED,
+                    ConnectionState.INITIALIZING,
+                    ConnectionState.CONNECTING,
+                )
+            ):
+                logger.info("Reconnect already in progress")
+                return
             logger.info("Reconnect requested")
             self.stop()
             # small pause to allow full shutdown
@@ -395,7 +421,7 @@ class ConnectionManager:
         if not self._ensure_ready_for_reads():
             return []
         try:
-            return self._client.positions_get()
+            return self._client.positions_get() or []
         except Exception as exc:
             self._record_error("FETCH_POSITIONS_FAILED", str(exc))
             return []
@@ -404,7 +430,7 @@ class ConnectionManager:
         if not self._ensure_ready_for_reads():
             return []
         try:
-            return self._client.symbols_get()
+            return self._client.symbols_get() or []
         except Exception as exc:
             self._record_error("FETCH_SYMBOLS_FAILED", str(exc))
             return []
@@ -431,7 +457,7 @@ class ConnectionManager:
         if not self._ensure_ready_for_reads():
             return []
         try:
-            return self._client.history_deals_get(from_dt, to_dt, ticket=ticket, symbol=symbol)
+            return self._client.history_deals_get(from_dt, to_dt, ticket=ticket, symbol=symbol) or []
         except Exception as exc:
             self._record_error("FETCH_HISTORY_DEALS_FAILED", str(exc))
             return []
@@ -440,7 +466,7 @@ class ConnectionManager:
         if not self._ensure_ready_for_reads():
             return []
         try:
-            return self._client.history_orders_get(from_dt, to_dt, ticket=ticket, symbol=symbol)
+            return self._client.history_orders_get(from_dt, to_dt, ticket=ticket, symbol=symbol) or []
         except Exception as exc:
             self._record_error("FETCH_HISTORY_ORDERS_FAILED", str(exc))
             return []

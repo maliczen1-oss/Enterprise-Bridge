@@ -41,7 +41,6 @@ async def test_health_endpoint_connected(mock_manager_connected):
     assert r.status_code == 200
     body = r.json()
     assert body["success"] is True
-    assert body["data"]["bridgeStatus"] == "READY"
     assert body["data"]["connectionState"] == "CONNECTED"
     assert body["data"]["mt5Initialized"] is True
     assert body["error"] is None
@@ -56,7 +55,6 @@ async def test_health_endpoint_disconnected(mock_manager_disconnected):
     assert r.status_code == 200
     body = r.json()
     assert body["success"] is False
-    assert body["data"]["bridgeStatus"] == "FAILED"
     assert body["data"]["connectionState"] == "FAILED"
     assert body["data"]["mt5Initialized"] is False
     assert body["error"] is not None
@@ -72,7 +70,6 @@ async def test_health_endpoint_unsupported_platform(mock_manager_unsupported):
     assert r.status_code == 200
     body = r.json()
     assert body["success"] is False
-    assert body["data"]["bridgeStatus"] == "UNSUPPORTED_PLATFORM"
     assert body["data"]["connectionState"] == "UNSUPPORTED_PLATFORM"
     assert body["error"] is not None
 

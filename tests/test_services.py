@@ -47,6 +47,12 @@ async def test_symbol_service_handles_missing(monkeypatch):
 @pytest.mark.asyncio
 async def test_history_service_handles_missing(monkeypatch):
     class FakeManager:
+        def get_state(self):
+            return "CONNECTED"
+
+        def get_last_error(self):
+            return None
+
         def fetch_history_deals(self, from_dt, to_dt, **k):
             return None
 

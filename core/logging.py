@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from bridge.core.request_context import get_request_id
+from core.request_context import get_request_id
 
 
 class _StructuredFormatter(logging.Formatter):

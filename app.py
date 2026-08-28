@@ -76,6 +76,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
+            response.headers["X-Request-ID"] = rid
             return response
 
         finally:
@@ -114,8 +115,8 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 #
 # against config.settings.AUTH_TOKEN.
 #
-app.add_middleware(RequestIDMiddleware)
 app.add_middleware(AuthenticationMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 
 # ---------------------------------------------------------------------------

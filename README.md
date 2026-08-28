@@ -1,4 +1,4 @@
-# WealthBuilder Bridge — Phase 2.1
+# WealthBuilder Enterprise Bridge — Founder Research Release
 
 > **Enterprise broker communication layer for WealthBuilder OS.**
 
@@ -7,8 +7,10 @@ responsibility is exposing broker functionality over a secure REST API.
 Risk calculation, signal generation, and position sizing remain inside
 WealthBuilder OS — the bridge knows nothing about strategy.
 
-Phase 2.1 delivers the complete enterprise foundation.  MT5 connectivity
-and live broker communication are implemented in Phase 2.2 and later.
+The current Windows release provides authenticated, read-only Vault MT5
+account, position, symbol, market, and history access. Trade mutation remains
+disabled and returns `NOT_IMPLEMENTED`; live trading requires a separate
+authorization and certification phase.
 
 ---
 
@@ -171,24 +173,18 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 | GET    | `/docs`   | No   | Swagger UI                      |
 | GET    | `/redoc`  | No   | ReDoc UI                        |
 
-### Protected endpoints (Phase 2.1 — return HTTP 501)
+### Protected endpoints
 
 | Method | Path                       | Description                     |
 |--------|----------------------------|---------------------------------|
-| GET    | `/api/account`             | Account metadata                |
-| GET    | `/api/account/balance`     | Balance and equity              |
-| GET    | `/api/account/margin`      | Margin information              |
+| GET    | `/api/account`             | Account summary                 |
 | GET    | `/api/positions`           | List open positions             |
-| GET    | `/api/positions/{ticket}`  | Single position by ticket       |
 | GET    | `/api/symbols`             | List available symbols          |
-| GET    | `/api/symbols/{symbol}`    | Symbol specification            |
-| GET    | `/api/market/{symbol}/tick`| Latest bid/ask tick             |
-| GET    | `/api/market/{symbol}/rates`| OHLCV rate history             |
-| POST   | `/api/trade/open`          | Open a new trade                |
-| PUT    | `/api/trade/{ticket}/modify` | Modify stop-loss / take-profit |
-| DELETE | `/api/trade/{ticket}/close` | Close an open position         |
-| GET    | `/api/history/deals`       | Historical deals                |
-| GET    | `/api/history/orders`      | Historical orders               |
+| GET    | `/api/market/{symbol}`     | Symbol specification and tick   |
+| GET    | `/api/history`             | Deals and orders for a date range |
+| POST   | `/api/trade/open`          | Locked — HTTP 501               |
+| PUT    | `/api/trade/{ticket}/modify` | Locked — HTTP 501             |
+| DELETE | `/api/trade/{ticket}/close` | Locked — HTTP 501              |
 
 ### Standard response envelope
 
@@ -265,18 +261,19 @@ The test suite validates:
 - Swagger and ReDoc load
 - `GET /health` returns HTTP 200
 - All protected endpoints return HTTP 401 without a valid token
-- All protected endpoints return HTTP 501 (not 500) with a valid token
+- Read-only endpoints follow the authenticated production contract
+- Trade mutations remain HTTP 501 with no broker side effects
 - All modules compile without import errors
 
 ---
 
 ## Engineering notes
 
-### No MT5 code
-Phase 2.1 contains zero references to MetaTrader5, broker connections, or
-trading logic.  The `ConnectionManager` maintains lifecycle state only.
-Service classes expose their public API as typed method signatures; all method
-bodies raise `NotImplementedError` as a compile-safe marker for Phase 2.2.
+### Windows MT5 boundary
+The Bridge connects to the locally installed MT5 terminal on Windows and is
+bound to loopback by default. The WealthBuilder hosted console receives only
+an explicitly allowlisted, outbound read-only snapshot. No inbound public MT5
+port is supported.
 
 ### Exception hierarchy
 All custom exceptions inherit from `BridgeBaseException` so a single

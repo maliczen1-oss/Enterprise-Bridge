@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_symbols_connected(client, mock_manager_connected):
-    resp = await client.get("/symbols", headers={"Authorization": "Bearer test-token"})
+    resp = await client.get("/api/symbols", headers={"Authorization": "Bearer test-token"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
@@ -15,7 +15,7 @@ async def test_symbols_connected(client, mock_manager_connected):
 
 @pytest.mark.asyncio
 async def test_symbols_disconnected(client, mock_manager_disconnected):
-    resp = await client.get("/symbols", headers={"Authorization": "Bearer test-token"})
+    resp = await client.get("/api/symbols", headers={"Authorization": "Bearer test-token"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is False

@@ -7,6 +7,13 @@ from core.connection_manager import manager as connection_manager
 logger = logging.getLogger("bridge")
 
 
+def _first_present(source: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in source and source[key] is not None:
+            return source[key]
+    return None
+
+
 def get_positions() -> List[Dict[str, Any]]:
     """
     Return open positions normalized to the Bridge API shape.
@@ -32,18 +39,18 @@ def get_positions() -> List[Dict[str, Any]]:
             continue
 
         pos = {
-            "ticket": p.get("ticket") or p.get("position") or p.get("ticket_id"),
-            "symbol": p.get("symbol") or p.get("name"),
-            "volume": p.get("volume") or p.get("lots") or p.get("lot_size"),
-            "price_open": p.get("price_open") or p.get("open_price") or p.get("price"),
-            "price_current": p.get("price") or p.get("current_price") or p.get("price_current"),
+            "ticket": _first_present(p, "ticket", "position", "ticket_id"),
+            "symbol": _first_present(p, "symbol", "name"),
+            "volume": _first_present(p, "volume", "lots", "lot_size"),
+            "price_open": _first_present(p, "price_open", "open_price", "price"),
+            "price_current": _first_present(p, "price", "current_price", "price_current"),
             "swap": p.get("swap"),
             "profit": p.get("profit"),
             "comment": p.get("comment"),
             # Time fields vary by MT5 build; prefer `time` then `time_setup` then `open_time`.
-            "time": p.get("time") or p.get("time_setup") or p.get("open_time"),
+            "time": _first_present(p, "time", "time_setup", "open_time"),
             # direction / type may be numeric or string depending on SDK
-            "type": p.get("type") or p.get("position_type") or p.get("side"),
+            "type": _first_present(p, "type", "position_type", "side"),
         }
         out.append(pos)
 

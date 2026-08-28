@@ -14,6 +14,9 @@ from core.responses import success_response, error_response
 router = APIRouter()
 logger = logging.getLogger("bridge")
 
+MAX_HISTORY_RANGE = dt.timedelta(days=90)
+MAX_HISTORY_LIMIT = 10_000
+
 
 @router.get("/history", response_model=models.BridgeResponse)
 async def history(
@@ -39,6 +42,36 @@ async def history(
                     request_id=request_id or request_time.isoformat(),
                     code="INVALID_DATE",
                     message="start and end must be ISO8601 datetimes",
+                ),
+            )
+
+        normalized_from = from_dt if from_dt.tzinfo else from_dt.replace(tzinfo=timezone.utc)
+        normalized_to = to_dt if to_dt.tzinfo else to_dt.replace(tzinfo=timezone.utc)
+        if normalized_from > normalized_to:
+            return JSONResponse(
+                status_code=400,
+                content=error_response(
+                    request_id=request_id or request_time.isoformat(),
+                    code="INVALID_DATE_RANGE",
+                    message="start must not be later than end",
+                ),
+            )
+        if normalized_to - normalized_from > MAX_HISTORY_RANGE:
+            return JSONResponse(
+                status_code=400,
+                content=error_response(
+                    request_id=request_id or request_time.isoformat(),
+                    code="RANGE_TOO_LARGE",
+                    message="History range must not exceed 90 days",
+                ),
+            )
+        if limit is not None and (limit <= 0 or limit > MAX_HISTORY_LIMIT):
+            return JSONResponse(
+                status_code=400,
+                content=error_response(
+                    request_id=request_id or request_time.isoformat(),
+                    code="LIMIT_EXCEEDED",
+                    message="limit must be between 1 and 10000",
                 ),
             )
 

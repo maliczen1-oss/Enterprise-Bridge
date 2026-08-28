@@ -46,7 +46,7 @@ async def health(request: Request):
         cm_health = connection_manager.get_health() or {}
         caps = connection_manager.get_capabilities() or {}
 
-        # Normalize connection state to the four required values.
+        # Preserve explicit capability failures for operator diagnosis.
         raw_state = (cm_health.get("connectionState") or caps.get("state") or "DISCONNECTED").upper()
         if raw_state == "CONNECTED":
             connection_state = "CONNECTED"
@@ -54,6 +54,8 @@ async def health(request: Request):
             connection_state = "CONNECTING"
         elif raw_state in ("FAILED",):
             connection_state = "FAILED"
+        elif raw_state in ("UNSUPPORTED_PLATFORM", "BACKEND_UNAVAILABLE"):
+            connection_state = raw_state
         else:
             connection_state = "DISCONNECTED"
 
@@ -62,22 +64,6 @@ async def health(request: Request):
         # Terminal version / server info
         terminal_version = cm_health.get("terminalVersion") or caps.get("terminalVersion")
         server = getattr(settings, "MT5_SERVER", None)
-
-        # Account summary: attempt a safe read-only fetch when connected
-        account_summary = None
-        try:
-            if connection_state == "CONNECTED":
-                acct = connection_manager.fetch_account()
-                if acct:
-                    # Do not expose secrets; include safe fields only if present
-                    account_summary = {
-                        "login": acct.get("login") if isinstance(acct, dict) else None,
-                        "balance": acct.get("balance") if isinstance(acct, dict) else None,
-                        "currency": acct.get("currency") if isinstance(acct, dict) else None,
-                    }
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug("Non-fatal account read failed for health: %s", e)
-            account_summary = None
 
         # Last error and reconnect metadata
         last_error = cm_health.get("lastError") or caps.get("lastError")
@@ -93,7 +79,6 @@ async def health(request: Request):
             "broker": os.environ.get("BROKER_PROVIDER", "bridge"),
             "server": server,
             "terminalVersion": terminal_version,
-            "account": account_summary,
             "lastError": last_error,
             "reconnectCount": reconnect_count,
             "lastReconnect": last_reconnect,
@@ -112,11 +97,7 @@ async def health(request: Request):
             msg = "Bridge not ready"
             code = "CONNECTION_NOT_READY"
             envelope = error_response(request_id=request_id, code=code, message=msg)
-            # Embed diagnostic data inside the envelope.data for operator visibility
-            # (the canonical BridgeResponse allows data on success only, but we include
-            # data in the error context under error.detail to avoid breaking clients.)
-            # To remain strictly canonical, attach diagnostics inside the error message.
-            # Here we return the envelope and rely on logs for rich diagnostics.
+            envelope["data"] = data
             logger.info("Health check not ready - state=%s request_id=%s", connection_state, request_id)
             return JSONResponse(status_code=200, content=envelope)
 

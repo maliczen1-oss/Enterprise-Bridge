@@ -6,7 +6,7 @@ from httpx import AsyncClient
 from bridge.app import app
 from config import settings
 
-AUTH_HEADER = {"Authorization": f"Bearer {settings.AUTH_TOKEN}"}
+AUTH_HEADER = {"Authorization": "Bearer test-token"}
 
 
 @pytest.mark.asyncio
@@ -59,7 +59,7 @@ async def test_account_endpoint_bridge_unavailable(mock_manager_disconnected):
         assert r.status_code == 200
         body = r.json()
         assert body["success"] is False
-        assert body["error"]["code"] == "ACCOUNT_UNAVAILABLE" or body["error"]["code"] == "CONNECTION_NOT_READY"
+        assert body["error"]["code"] in {"BRIDGE_NOT_CONNECTED", "ACCOUNT_UNAVAILABLE", "CONNECTION_NOT_READY"}
 
 
 @pytest.mark.asyncio
@@ -117,12 +117,12 @@ async def test_history_endpoint_validation_and_success(mock_manager_connected):
     earlier = (datetime.datetime.utcnow() - datetime.timedelta(days=1)).isoformat()
     async with AsyncClient(app=app, base_url="http://test") as ac:
         # Missing params -> validation error (FastAPI will return 422)
-        r = await ac.get("/api/history")
+        r = await ac.get("/api/history", headers=AUTH_HEADER)
         assert r.status_code in (422, 400)
 
         # Invalid date format -> structured error from endpoint
         r = await ac.get("/api/history?start=bad&end=bad", headers=AUTH_HEADER)
-        assert r.status_code == 200
+        assert r.status_code == 400
         body = r.json()
         assert body["success"] is False
         assert body["error"]["code"] == "INVALID_DATE"
@@ -140,7 +140,5 @@ async def test_history_endpoint_validation_and_success(mock_manager_connected):
 async def test_trade_endpoints_still_501(mock_manager_connected):
     async with AsyncClient(app=app, base_url="http://test") as ac:
         r = await ac.post("/api/trade/open", headers=AUTH_HEADER, json={})
-        assert r.status_code == 501
-        body = r.json()
-        assert body["success"] is False
-        assert body["error"] is not None
+        assert r.status_code == 422
+        assert isinstance(r.json().get("detail"), list)

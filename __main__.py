@@ -13,8 +13,8 @@ from bridge.config import settings
 if __name__ == "__main__":
     uvicorn.run(
         "bridge.app:app",
-        host=settings.host,
-        port=settings.port,
+        host=settings.HOST,
+        port=settings.PORT,
         log_config=None,  # Disable Uvicorn's default logging; we own it.
         access_log=False,
     )
