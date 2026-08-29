@@ -70,6 +70,8 @@ def test_alias_normalization(monkeypatch):
             "current_price": 1.2550,
             "position_type": "BUY",
             "time_setup": 1234567890,
+            "sl": 1.2400,
+            "tp": 1.2700,
         }
     ]
 
@@ -92,6 +94,8 @@ def test_alias_normalization(monkeypatch):
     assert pos["price_current"] == 1.2550
     assert pos["type"] == "BUY"
     assert pos["time"] == 1234567890
+    assert pos["stop_loss"] == 1.2400
+    assert pos["take_profit"] == 1.2700
 
 
 def test_primary_fields_take_precedence(monkeypatch):
@@ -156,6 +160,8 @@ def test_missing_fields_are_handled(monkeypatch):
         "volume",
         "price_open",
         "price_current",
+        "stop_loss",
+        "take_profit",
         "swap",
         "profit",
         "comment",
@@ -240,6 +246,8 @@ def test_returned_schema(monkeypatch):
         "volume",
         "price_open",
         "price_current",
+        "stop_loss",
+        "take_profit",
         "swap",
         "profit",
         "comment",
