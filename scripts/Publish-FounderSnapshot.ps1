@@ -6,7 +6,9 @@ param(
     [string]$BridgeToken = $env:BRIDGE_AUTH_TOKEN,
     [switch]$Continuous,
     [ValidateRange(15, 3600)]
-    [int]$IntervalSeconds = 60
+    [int]$IntervalSeconds = 60,
+    [ValidateRange(5, 120)]
+    [int]$RelayTimeoutSeconds = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -98,13 +100,16 @@ function Publish-Snapshot {
 
     $body = $payload | ConvertTo-Json -Depth 6 -Compress
     $result = Invoke-RestMethod -Uri "$($RelayUrl.TrimEnd('/'))/api/worker/snapshot" -Method Post `
-        -Headers $relayHeaders -ContentType "application/json" -Body $body -TimeoutSec 15
+        -Headers $relayHeaders -ContentType "application/json" -Body $body -TimeoutSec $RelayTimeoutSeconds
     if (-not $result.success) { throw "The remote service did not accept the snapshot." }
     Write-Host "Read-only founder snapshot accepted at $($result.acceptedAt)." -ForegroundColor Green
 }
 
 do {
     try { Publish-Snapshot }
-    catch { Write-Error "Snapshot relay failed: $($_.Exception.Message)" -ErrorAction Continue }
+    catch {
+        if (-not $Continuous) { throw }
+        Write-Error "Snapshot relay failed: $($_.Exception.Message)" -ErrorAction Continue
+    }
     if ($Continuous) { Start-Sleep -Seconds $IntervalSeconds }
 } while ($Continuous)
