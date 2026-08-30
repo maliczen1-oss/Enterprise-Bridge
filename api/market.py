@@ -63,7 +63,10 @@ async def market_bars(
     request: Request = None,
 ):
     request_id = get_request_id() or (request.headers.get("X-Request-Id") if request else None) or ""
-    normalized_symbol = symbol.strip().upper() if isinstance(symbol, str) else ""
+    # Broker symbol identifiers can contain case-sensitive suffixes (for
+    # example, VaultMarkets exposes ``XAUUSD.mic``). Preserve the broker's
+    # exact casing while still trimming surrounding whitespace.
+    normalized_symbol = symbol.strip() if isinstance(symbol, str) else ""
     normalized_timeframe = timeframe.strip().upper() if isinstance(timeframe, str) else ""
 
     if not normalized_symbol or len(normalized_symbol) > 64:
