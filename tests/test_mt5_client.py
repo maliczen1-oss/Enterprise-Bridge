@@ -177,6 +177,7 @@ def test_legacy_backend_delegates_and_converts_records(monkeypatch):
         symbols_get=lambda: [record],
         symbol_info=lambda symbol: record,
         symbol_info_tick=lambda symbol: record,
+        symbol_select=lambda symbol, selected: True,
         copy_rates_from_pos=lambda *args: [record],
         TIMEFRAME_H1=16385,
         history_deals_get=lambda *args: [record],
@@ -214,3 +215,20 @@ def test_metaapi_market_bars_fail_closed(monkeypatch):
     client = metaapi_client(monkeypatch)
     assert client.copy_rates_from_pos("EURUSD", "H1") == []
     assert client.last_error()["code"] == "MARKET_BARS_UNSUPPORTED"
+
+
+def test_legacy_market_bars_fail_when_symbol_cannot_be_selected(monkeypatch):
+    fake = SimpleNamespace(
+        TIMEFRAME_H1=16385,
+        symbol_select=lambda symbol, selected: False,
+        copy_rates_from_pos=lambda *args: pytest.fail("bars must not be read"),
+    )
+    monkeypatch.setattr(mt5_client, "METAAPI_CONFIGURED", False)
+    monkeypatch.setattr(mt5_client, "_LOCAL_MT5_AVAILABLE", True)
+    monkeypatch.setattr(mt5_client, "PLATFORM", "windows")
+    monkeypatch.setattr(mt5_client, "mt5", fake)
+    client = mt5_client.MT5Client()
+    client._backend = "metatrader5"
+    client._mt5 = fake
+    assert client.copy_rates_from_pos("XAUUSD.mic", "H1", count=10) == []
+    assert client.last_error()["code"] == "SYMBOL_UNAVAILABLE"

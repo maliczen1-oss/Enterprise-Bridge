@@ -1948,13 +1948,11 @@ class MT5Client:
         Dict[str, Any]
     ]:
 
-        if self._backend == "metaapi":
+        if self._last_error:
+            return dict(self._last_error)
 
-            return (
-                dict(self._last_error)
-                if self._last_error
-                else None
-            )
+        if self._backend == "metaapi":
+            return None
 
         if not self._use_legacy():
             return None
@@ -2452,6 +2450,9 @@ class MT5Client:
             timeframe_value = getattr(self._mt5, allowed[normalized_timeframe], None)
             if timeframe_value is None:
                 self._set_error("TIMEFRAME_UNAVAILABLE", "MT5 timeframe constant is unavailable.")
+                return []
+            if hasattr(self._mt5, "symbol_select") and not self._mt5.symbol_select(normalized_symbol, True):
+                self._set_error("SYMBOL_UNAVAILABLE", "MT5 could not select the requested symbol.")
                 return []
             rates = self._mt5.copy_rates_from_pos(
                 normalized_symbol,

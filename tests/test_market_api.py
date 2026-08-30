@@ -45,6 +45,35 @@ async def test_market_bars_success(client, mock_manager_connected, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_market_bars_preserves_case_sensitive_broker_suffix(
+    client, mock_manager_connected, monkeypatch
+):
+    captured = {}
+
+    def fake_get_bars(symbol, timeframe, count):
+        captured.update(symbol=symbol, timeframe=timeframe, count=count)
+        return {
+            "schemaVersion": "1.0",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "priceBasis": "BID",
+            "source": "LOCAL_MT5",
+            "barCount": 1,
+            "bars": [{"time": 1, "open": 1, "high": 2, "low": 0.5, "close": 1.5}],
+        }
+
+    monkeypatch.setattr("api.market.market_service.get_bars", fake_get_bars)
+    response = await client.get(
+        "/api/market/XAUUSD.mic/bars?timeframe=h4&count=100",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert captured == {"symbol": "XAUUSD.mic", "timeframe": "H4", "count": 100}
+
+
+@pytest.mark.asyncio
 async def test_market_bars_rejects_unknown_timeframe(client, mock_manager_connected):
     response = await client.get(
         "/api/market/XAUUSD/bars?timeframe=H2&count=100",
