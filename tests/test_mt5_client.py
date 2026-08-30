@@ -177,6 +177,8 @@ def test_legacy_backend_delegates_and_converts_records(monkeypatch):
         symbols_get=lambda: [record],
         symbol_info=lambda symbol: record,
         symbol_info_tick=lambda symbol: record,
+        copy_rates_from_pos=lambda *args: [record],
+        TIMEFRAME_H1=16385,
         history_deals_get=lambda *args: [record],
         history_orders_get=lambda *args: [record],
         terminal_info=lambda: record,
@@ -193,5 +195,22 @@ def test_legacy_backend_delegates_and_converts_records(monkeypatch):
     assert client.account_info() == {"ticket": 1}
     assert client.positions_get() == [{"ticket": 1}]
     assert client.symbols_get() == [{"ticket": 1}]
+    assert client.copy_rates_from_pos("EURUSD", "H1", count=10) == [{"ticket": 1}]
     assert client.history_deals_get(*[dt.datetime.now()] * 2) == [{"ticket": 1}]
     assert client.shutdown() is True
+
+
+def test_market_bars_reject_invalid_arguments(monkeypatch):
+    client = metaapi_client(monkeypatch)
+    assert client.copy_rates_from_pos("", "H1") == []
+    assert client.last_error()["code"] == "INVALID_SYMBOL"
+    assert client.copy_rates_from_pos("EURUSD", "H2") == []
+    assert client.last_error()["code"] == "INVALID_TIMEFRAME"
+    assert client.copy_rates_from_pos("EURUSD", "H1", count=2001) == []
+    assert client.last_error()["code"] == "INVALID_BAR_COUNT"
+
+
+def test_metaapi_market_bars_fail_closed(monkeypatch):
+    client = metaapi_client(monkeypatch)
+    assert client.copy_rates_from_pos("EURUSD", "H1") == []
+    assert client.last_error()["code"] == "MARKET_BARS_UNSUPPORTED"

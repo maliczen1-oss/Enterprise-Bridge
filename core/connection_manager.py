@@ -453,6 +453,20 @@ class ConnectionManager:
             self._record_error("FETCH_SYMBOL_TICK_FAILED", str(exc))
             return None
 
+    def fetch_symbol_rates(self, symbol: str, timeframe: str, start_pos: int = 0, count: int = 500) -> List[Dict[str, Any]]:
+        if not self._ensure_ready_for_reads():
+            return []
+        try:
+            return self._client.copy_rates_from_pos(
+                symbol,
+                timeframe,
+                start_pos=start_pos,
+                count=count,
+            ) or []
+        except Exception as exc:
+            self._record_error("FETCH_SYMBOL_RATES_FAILED", str(exc))
+            return []
+
     def fetch_history_deals(self, from_dt: datetime.datetime, to_dt: datetime.datetime, ticket: Optional[int] = None, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         if not self._ensure_ready_for_reads():
             return []
