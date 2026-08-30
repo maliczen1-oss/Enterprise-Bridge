@@ -99,6 +99,28 @@ function Get-VerifiedMarkets {
     return $markets
 }
 
+function Get-VerifiedResearchHistory {
+    $research = @()
+    foreach ($instrument in $marketUniverse) {
+        $encodedSymbol = [Uri]::EscapeDataString($instrument.symbol)
+        $barsResponse = Invoke-RestMethod `
+            -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=H1&count=1500" `
+            -Method Get -Headers $bridgeHeaders -TimeoutSec 30
+        if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt 500) {
+            throw "At least 500 verified H1 research bars are required for $($instrument.symbol)."
+        }
+        $research += [ordered]@{
+            displaySymbol = $instrument.displaySymbol
+            symbol = $instrument.symbol
+            timeframe = "H1"
+            priceBasis = [string]$barsResponse.data.priceBasis
+            source = [string]$barsResponse.data.source
+            bars = @($barsResponse.data.bars)
+        }
+    }
+    return $research
+}
+
 function Publish-Snapshot {
     $health = Invoke-RestMethod -Uri "$BridgeUrl/health" -Method Get -TimeoutSec 10
     if (-not $health.success -or $health.data.connectionState -ne "CONNECTED") {
@@ -110,6 +132,7 @@ function Publish-Snapshot {
         throw "The Bridge did not return a complete read-only snapshot."
     }
     $markets = Get-VerifiedMarkets
+    $research = Get-VerifiedResearchHistory
 
     $positions = @($positionsResponse.data | ForEach-Object {
         [ordered]@{
@@ -128,7 +151,7 @@ function Publish-Snapshot {
 
     $capturedAt = [DateTime]::UtcNow.ToString("o")
     $payload = [ordered]@{
-        version    = 2
+        version    = 3
         snapshotId = [guid]::NewGuid().ToString()
         capturedAt = $capturedAt
         bridge     = [ordered]@{
@@ -146,6 +169,7 @@ function Publish-Snapshot {
         }
         positions  = $positions
         markets    = $markets
+        research   = $research
     }
 
     $body = $payload | ConvertTo-Json -Depth 10 -Compress
