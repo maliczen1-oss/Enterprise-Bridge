@@ -271,3 +271,27 @@ def test_return_schema(monkeypatch):
         "high",
         "low",
     }
+
+
+def test_bars_are_validated_sorted_and_deduplicated(monkeypatch):
+    monkeypatch.setattr(
+        market_service.connection_manager,
+        "fetch_symbol_rates",
+        lambda *args, **kwargs: [
+            {"time": 20, "open": 2, "high": 3, "low": 1, "close": 2.5, "tick_volume": 5},
+            {"time": 10, "open": 1, "high": 2, "low": 0.5, "close": 1.5, "spread": 2},
+            {"time": 10, "open": 1, "high": 2.1, "low": 0.4, "close": 1.6},
+            {"time": 30, "open": 2, "high": 1, "low": 0, "close": 2},
+            {"time": "bad", "open": 1, "high": 2, "low": 0, "close": 1},
+        ],
+    )
+
+    result = market_service.get_bars("xauusd", "h1", 100)
+
+    assert result["schemaVersion"] == "1.0"
+    assert result["symbol"] == "XAUUSD"
+    assert result["timeframe"] == "H1"
+    assert result["priceBasis"] == "BID"
+    assert [bar["time"] for bar in result["bars"]] == [10, 20]
+    assert result["bars"][0]["high"] == 2.1
+    assert result["barCount"] == 2

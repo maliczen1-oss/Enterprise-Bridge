@@ -2402,6 +2402,82 @@ class MT5Client:
 
             return None
 
+    def copy_rates_from_pos(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_pos: int = 0,
+        count: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Return bounded OHLC bars from the local MT5 terminal.
+
+        The founder market-data release intentionally supports the Windows
+        terminal only. MetaApi is not used as a silent fallback because doing
+        so would obscure the broker source and chart provenance.
+        """
+        normalized_symbol = symbol.strip() if isinstance(symbol, str) else ""
+        normalized_timeframe = timeframe.strip().upper() if isinstance(timeframe, str) else ""
+        allowed = {
+            "M1": "TIMEFRAME_M1",
+            "M5": "TIMEFRAME_M5",
+            "M15": "TIMEFRAME_M15",
+            "H1": "TIMEFRAME_H1",
+            "H4": "TIMEFRAME_H4",
+            "D1": "TIMEFRAME_D1",
+            "W1": "TIMEFRAME_W1",
+        }
+
+        if not normalized_symbol:
+            self._set_error("INVALID_SYMBOL", "Symbol must be a non-empty string.")
+            return []
+        if normalized_timeframe not in allowed:
+            self._set_error("INVALID_TIMEFRAME", "Timeframe is not allowlisted.")
+            return []
+        if not isinstance(start_pos, int) or start_pos < 0:
+            self._set_error("INVALID_START_POSITION", "Start position must be a non-negative integer.")
+            return []
+        if not isinstance(count, int) or count < 1 or count > 2000:
+            self._set_error("INVALID_BAR_COUNT", "Bar count must be between 1 and 2000.")
+            return []
+        if self._backend == "metaapi":
+            self._set_error(
+                "MARKET_BARS_UNSUPPORTED",
+                "OHLC bars require the authenticated local MT5 terminal.",
+            )
+            return []
+        if not self._use_legacy():
+            return []
+
+        try:
+            timeframe_value = getattr(self._mt5, allowed[normalized_timeframe], None)
+            if timeframe_value is None:
+                self._set_error("TIMEFRAME_UNAVAILABLE", "MT5 timeframe constant is unavailable.")
+                return []
+            rates = self._mt5.copy_rates_from_pos(
+                normalized_symbol,
+                timeframe_value,
+                start_pos,
+                count,
+            )
+            if rates is None:
+                return []
+            records: List[Dict[str, Any]] = []
+            for rate in rates:
+                record = _as_dict(rate)
+                if record is None:
+                    field_names = getattr(getattr(rate, "dtype", None), "names", None)
+                    if field_names:
+                        record = {
+                            name: rate[name].item() if hasattr(rate[name], "item") else rate[name]
+                            for name in field_names
+                        }
+                if record is not None:
+                    records.append(record)
+            return records
+        except Exception:
+            logger.debug("mt5.copy_rates_from_pos() raised.", exc_info=True)
+            return []
+
     # ========================================================================
     # History
     # ========================================================================

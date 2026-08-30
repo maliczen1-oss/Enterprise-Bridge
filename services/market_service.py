@@ -1,5 +1,6 @@
 # services/market_service.py
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+import math
 import logging
 
 from core.connection_manager import manager as connection_manager
@@ -49,3 +50,52 @@ def get_market(symbol: str) -> Optional[Dict[str, Any]]:
         "low": info.get("low") if isinstance(info, dict) else None,
     }
     return result
+
+
+def get_bars(symbol: str, timeframe: str, count: int) -> Dict[str, Any]:
+    """Return validated broker OHLC bars without filling data gaps."""
+    raw_rates = connection_manager.fetch_symbol_rates(symbol, timeframe, count=count)
+    bars: List[Dict[str, Any]] = []
+
+    for raw in raw_rates:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            timestamp = int(raw["time"])
+            open_price = float(raw["open"])
+            high = float(raw["high"])
+            low = float(raw["low"])
+            close = float(raw["close"])
+            tick_volume = int(raw.get("tick_volume", 0))
+            spread = int(raw.get("spread", 0))
+            real_volume = int(raw.get("real_volume", 0))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        prices = (open_price, high, low, close)
+        if timestamp <= 0 or not all(math.isfinite(price) for price in prices):
+            continue
+        if high < max(open_price, close) or low > min(open_price, close) or high < low:
+            continue
+        bars.append({
+            "time": timestamp,
+            "open": open_price,
+            "high": high,
+            "low": low,
+            "close": close,
+            "tickVolume": max(0, tick_volume),
+            "spreadPoints": max(0, spread),
+            "realVolume": max(0, real_volume),
+        })
+
+    bars.sort(key=lambda item: item["time"])
+    deduplicated = {bar["time"]: bar for bar in bars}
+    normalized = list(deduplicated.values())
+    return {
+        "schemaVersion": "1.0",
+        "symbol": symbol.upper(),
+        "timeframe": timeframe.upper(),
+        "priceBasis": "BID",
+        "source": "LOCAL_MT5",
+        "barCount": len(normalized),
+        "bars": normalized,
+    }
