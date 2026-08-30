@@ -51,6 +51,54 @@ function Convert-ToIsoTimestamp([object]$Value) {
     throw "Position opening time is not recognized; snapshot publication stopped."
 }
 
+$marketUniverse = @(
+    [ordered]@{ displaySymbol = "EUR/USD"; symbol = "EURUSD.mic" },
+    [ordered]@{ displaySymbol = "NAS100"; symbol = ".USTECH.mic" }
+)
+$marketTimeframes = @("M1", "M5", "M15", "H1", "H4", "D1", "W1")
+
+function Get-VerifiedMarkets {
+    $markets = @()
+    foreach ($instrument in $marketUniverse) {
+        $encodedSymbol = [Uri]::EscapeDataString($instrument.symbol)
+        $quoteResponse = Invoke-RestMethod -Uri "$BridgeUrl/api/market/$encodedSymbol" -Method Get `
+            -Headers $bridgeHeaders -TimeoutSec 10
+        if (-not $quoteResponse.success) {
+            throw "Verified quote unavailable for $($instrument.symbol)."
+        }
+
+        $series = @()
+        foreach ($timeframe in $marketTimeframes) {
+            $barsResponse = Invoke-RestMethod `
+                -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=$timeframe&count=120" `
+                -Method Get -Headers $bridgeHeaders -TimeoutSec 20
+            if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt 10) {
+                throw "Verified $timeframe bars unavailable for $($instrument.symbol)."
+            }
+            $series += [ordered]@{
+                timeframe = $timeframe
+                priceBasis = [string]$barsResponse.data.priceBasis
+                source = [string]$barsResponse.data.source
+                bars = @($barsResponse.data.bars)
+            }
+        }
+
+        $markets += [ordered]@{
+            displaySymbol = $instrument.displaySymbol
+            symbol = $instrument.symbol
+            quote = [ordered]@{
+                bid = [double]$quoteResponse.data.bid
+                ask = [double]$quoteResponse.data.ask
+                spread = [double]$quoteResponse.data.spread
+                time = [long]$quoteResponse.data.time
+                digits = [int]$quoteResponse.data.digits
+            }
+            series = $series
+        }
+    }
+    return $markets
+}
+
 function Publish-Snapshot {
     $health = Invoke-RestMethod -Uri "$BridgeUrl/health" -Method Get -TimeoutSec 10
     if (-not $health.success -or $health.data.connectionState -ne "CONNECTED") {
@@ -61,6 +109,7 @@ function Publish-Snapshot {
     if (-not $accountResponse.success -or -not $positionsResponse.success) {
         throw "The Bridge did not return a complete read-only snapshot."
     }
+    $markets = Get-VerifiedMarkets
 
     $positions = @($positionsResponse.data | ForEach-Object {
         [ordered]@{
@@ -79,7 +128,7 @@ function Publish-Snapshot {
 
     $capturedAt = [DateTime]::UtcNow.ToString("o")
     $payload = [ordered]@{
-        version    = 1
+        version    = 2
         snapshotId = [guid]::NewGuid().ToString()
         capturedAt = $capturedAt
         bridge     = [ordered]@{
@@ -96,9 +145,10 @@ function Publish-Snapshot {
             currency   = [string]$accountResponse.data.currency
         }
         positions  = $positions
+        markets    = $markets
     }
 
-    $body = $payload | ConvertTo-Json -Depth 6 -Compress
+    $body = $payload | ConvertTo-Json -Depth 10 -Compress
     $result = Invoke-RestMethod -Uri "$($RelayUrl.TrimEnd('/'))/api/worker/snapshot" -Method Post `
         -Headers $relayHeaders -ContentType "application/json" -Body $body -TimeoutSec $RelayTimeoutSeconds
     if (-not $result.success) { throw "The remote service did not accept the snapshot." }
