@@ -59,7 +59,7 @@ async def market(symbol: str = Path(..., description="Symbol to query"), request
 async def market_bars(
     symbol: str = Path(..., description="Symbol to query"),
     timeframe: str = Query("H1", description="Allowlisted MT5 timeframe"),
-    count: int = Query(500, ge=10, le=2000),
+    count: int = Query(500, ge=10, le=10000),
     request: Request = None,
 ):
     request_id = get_request_id() or (request.headers.get("X-Request-Id") if request else None) or ""

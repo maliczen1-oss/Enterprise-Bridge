@@ -2434,8 +2434,8 @@ class MT5Client:
         if not isinstance(start_pos, int) or start_pos < 0:
             self._set_error("INVALID_START_POSITION", "Start position must be a non-negative integer.")
             return []
-        if not isinstance(count, int) or count < 1 or count > 2000:
-            self._set_error("INVALID_BAR_COUNT", "Bar count must be between 1 and 2000.")
+        if not isinstance(count, int) or count < 1 or count > 10000:
+            self._set_error("INVALID_BAR_COUNT", "Bar count must be between 1 and 10000.")
             return []
         if self._backend == "metaapi":
             self._set_error(

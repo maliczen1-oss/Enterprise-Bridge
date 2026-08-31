@@ -207,7 +207,7 @@ def test_market_bars_reject_invalid_arguments(monkeypatch):
     assert client.last_error()["code"] == "INVALID_SYMBOL"
     assert client.copy_rates_from_pos("EURUSD", "H2") == []
     assert client.last_error()["code"] == "INVALID_TIMEFRAME"
-    assert client.copy_rates_from_pos("EURUSD", "H1", count=2001) == []
+    assert client.copy_rates_from_pos("EURUSD", "H1", count=10001) == []
     assert client.last_error()["code"] == "INVALID_BAR_COUNT"
 
 

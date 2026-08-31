@@ -104,7 +104,7 @@ function Get-VerifiedResearchHistory {
     foreach ($instrument in $marketUniverse) {
         $encodedSymbol = [Uri]::EscapeDataString($instrument.symbol)
         $barsResponse = Invoke-RestMethod `
-            -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=H1&count=1500" `
+            -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=H1&count=10000" `
             -Method Get -Headers $bridgeHeaders -TimeoutSec 30
         if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt 500) {
             throw "At least 500 verified H1 research bars are required for $($instrument.symbol)."

@@ -38,7 +38,7 @@ def test_publisher_reads_only_account_positions_and_public_health():
 
 def test_publisher_includes_bounded_h1_research_history_for_certification():
     assert "Get-VerifiedResearchHistory" in SCRIPT
-    assert "timeframe=H1&count=1500" in SCRIPT
+    assert "timeframe=H1&count=10000" in SCRIPT
     assert 'version    = 3' in SCRIPT
     assert 'research   = $research' in SCRIPT
 
