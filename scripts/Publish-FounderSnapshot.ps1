@@ -59,6 +59,9 @@ $marketTimeframes = @("M1", "M5", "M15", "H1", "H4", "D1", "W1")
 
 function Get-VerifiedMarkets([int]$BarCount = 120) {
     $markets = @()
+    # The Bridge endpoint deliberately requires at least ten bars per request.
+    # Incremental relay payloads retain only the newest requested subset.
+    $requestCount = [Math]::Max(10, $BarCount)
     foreach ($instrument in $marketUniverse) {
         $encodedSymbol = [Uri]::EscapeDataString($instrument.symbol)
         $quoteResponse = Invoke-RestMethod -Uri "$BridgeUrl/api/market/$encodedSymbol" -Method Get `
@@ -70,16 +73,20 @@ function Get-VerifiedMarkets([int]$BarCount = 120) {
         $series = @()
         foreach ($timeframe in $marketTimeframes) {
             $barsResponse = Invoke-RestMethod `
-                -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=$timeframe&count=$BarCount" `
+                -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=$timeframe&count=$requestCount" `
                 -Method Get -Headers $bridgeHeaders -TimeoutSec 20
-            if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt 10) {
+            if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt $requestCount) {
                 throw "Verified $timeframe bars unavailable for $($instrument.symbol)."
+            }
+            $verifiedBars = @($barsResponse.data.bars)
+            if ($verifiedBars.Count -gt $BarCount) {
+                $verifiedBars = @($verifiedBars | Select-Object -Last $BarCount)
             }
             $series += [ordered]@{
                 timeframe = $timeframe
                 priceBasis = [string]$barsResponse.data.priceBasis
                 source = [string]$barsResponse.data.source
-                bars = @($barsResponse.data.bars)
+                bars = $verifiedBars
             }
         }
 
