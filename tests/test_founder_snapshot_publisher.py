@@ -46,6 +46,8 @@ def test_publisher_includes_bounded_h1_research_history_for_certification():
 def test_publisher_uses_small_frequent_deltas_and_periodic_full_archives():
     assert "version    = $(if ($IncludeResearch) { 3 } else { 4 })" in SCRIPT
     assert "Get-VerifiedMarkets -BarCount $(if ($IncludeResearch) { 120 } else { 3 })" in SCRIPT
+    assert "$requestCount = [Math]::Max(10, $BarCount)" in SCRIPT
+    assert "Select-Object -Last $BarCount" in SCRIPT
     assert "$cycle % 240 -eq 0" in SCRIPT
     assert "[int]$IntervalSeconds = 15" in LAUNCHER
     assert "$statusCode -eq 409" in SCRIPT
