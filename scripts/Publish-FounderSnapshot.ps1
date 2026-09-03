@@ -57,7 +57,7 @@ $marketUniverse = @(
 )
 $marketTimeframes = @("M1", "M5", "M15", "H1", "H4", "D1", "W1")
 
-function Get-VerifiedMarkets {
+function Get-VerifiedMarkets([int]$BarCount = 120) {
     $markets = @()
     foreach ($instrument in $marketUniverse) {
         $encodedSymbol = [Uri]::EscapeDataString($instrument.symbol)
@@ -70,7 +70,7 @@ function Get-VerifiedMarkets {
         $series = @()
         foreach ($timeframe in $marketTimeframes) {
             $barsResponse = Invoke-RestMethod `
-                -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=$timeframe&count=120" `
+                -Uri "$BridgeUrl/api/market/$encodedSymbol/bars?timeframe=$timeframe&count=$BarCount" `
                 -Method Get -Headers $bridgeHeaders -TimeoutSec 20
             if (-not $barsResponse.success -or @($barsResponse.data.bars).Count -lt 10) {
                 throw "Verified $timeframe bars unavailable for $($instrument.symbol)."
@@ -121,7 +121,7 @@ function Get-VerifiedResearchHistory {
     return $research
 }
 
-function Publish-Snapshot {
+function Publish-Snapshot([switch]$IncludeResearch) {
     $health = Invoke-RestMethod -Uri "$BridgeUrl/health" -Method Get -TimeoutSec 10
     if (-not $health.success -or $health.data.connectionState -ne "CONNECTED") {
         throw "Enterprise Bridge is not connected to MT5."
@@ -131,8 +131,7 @@ function Publish-Snapshot {
     if (-not $accountResponse.success -or -not $positionsResponse.success) {
         throw "The Bridge did not return a complete read-only snapshot."
     }
-    $markets = Get-VerifiedMarkets
-    $research = Get-VerifiedResearchHistory
+    $markets = Get-VerifiedMarkets -BarCount $(if ($IncludeResearch) { 120 } else { 3 })
 
     $positions = @($positionsResponse.data | ForEach-Object {
         [ordered]@{
@@ -151,7 +150,7 @@ function Publish-Snapshot {
 
     $capturedAt = [DateTime]::UtcNow.ToString("o")
     $payload = [ordered]@{
-        version    = 3
+        version    = $(if ($IncludeResearch) { 3 } else { 4 })
         snapshotId = [guid]::NewGuid().ToString()
         capturedAt = $capturedAt
         bridge     = [ordered]@{
@@ -169,18 +168,36 @@ function Publish-Snapshot {
         }
         positions  = $positions
         markets    = $markets
-        research   = $research
+    }
+    if ($IncludeResearch) {
+        $payload.research = Get-VerifiedResearchHistory
     }
 
     $body = $payload | ConvertTo-Json -Depth 10 -Compress
-    $result = Invoke-RestMethod -Uri "$($RelayUrl.TrimEnd('/'))/api/worker/snapshot" -Method Post `
-        -Headers $relayHeaders -ContentType "application/json" -Body $body -TimeoutSec $RelayTimeoutSeconds
+    try {
+        $result = Invoke-RestMethod -Uri "$($RelayUrl.TrimEnd('/'))/api/worker/snapshot" -Method Post `
+            -Headers $relayHeaders -ContentType "application/json" -Body $body -TimeoutSec $RelayTimeoutSeconds
+    }
+    catch {
+        $statusCode = 0
+        try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
+        if (-not $IncludeResearch -and $statusCode -eq 409) {
+            Write-Warning "Remote snapshot base is unavailable; restoring the complete verified archive."
+            Publish-Snapshot -IncludeResearch
+            return
+        }
+        throw
+    }
     if (-not $result.success) { throw "The remote service did not accept the snapshot." }
     Write-Host "Read-only founder snapshot accepted at $($result.acceptedAt)." -ForegroundColor Green
 }
 
+$cycle = 0
 do {
-    try { Publish-Snapshot }
+    try {
+        Publish-Snapshot -IncludeResearch:($cycle % 240 -eq 0)
+        $cycle += 1
+    }
     catch {
         if (-not $Continuous) { throw }
         Write-Error "Snapshot relay failed: $($_.Exception.Message)" -ErrorAction Continue

@@ -2,7 +2,7 @@
 param(
     [switch]$Once,
     [ValidateRange(15, 3600)]
-    [int]$IntervalSeconds = 60,
+    [int]$IntervalSeconds = 15,
     [ValidateRange(5, 120)]
     [int]$RelayTimeoutSeconds = 30
 )

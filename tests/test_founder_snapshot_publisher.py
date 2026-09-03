@@ -39,8 +39,17 @@ def test_publisher_reads_only_account_positions_and_public_health():
 def test_publisher_includes_bounded_h1_research_history_for_certification():
     assert "Get-VerifiedResearchHistory" in SCRIPT
     assert "timeframe=H1&count=10000" in SCRIPT
-    assert 'version    = 3' in SCRIPT
-    assert 'research   = $research' in SCRIPT
+    assert "version    = $(if ($IncludeResearch) { 3 } else { 4 })" in SCRIPT
+    assert '$payload.research = Get-VerifiedResearchHistory' in SCRIPT
+
+
+def test_publisher_uses_small_frequent_deltas_and_periodic_full_archives():
+    assert "version    = $(if ($IncludeResearch) { 3 } else { 4 })" in SCRIPT
+    assert "Get-VerifiedMarkets -BarCount $(if ($IncludeResearch) { 120 } else { 3 })" in SCRIPT
+    assert "$cycle % 240 -eq 0" in SCRIPT
+    assert "[int]$IntervalSeconds = 15" in LAUNCHER
+    assert "$statusCode -eq 409" in SCRIPT
+    assert "Publish-Snapshot -IncludeResearch" in SCRIPT
 
 
 def test_publisher_does_not_relay_account_identity_or_broker_comments():
