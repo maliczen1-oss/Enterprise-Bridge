@@ -24,8 +24,14 @@ if (-not $authLine) {
 }
 
 $bridgeToken = $authLine.Substring("AUTH_TOKEN=".Length).Trim().Trim('"').Trim("'")
-$relayUrl = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_URL", "User")
-$relayToken = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_TOKEN", "User")
+$relayUrl = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_URL", "Process")
+$relayToken = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_TOKEN", "Process")
+if ([string]::IsNullOrWhiteSpace($relayUrl)) {
+    $relayUrl = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_URL", "User")
+}
+if ([string]::IsNullOrWhiteSpace($relayToken)) {
+    $relayToken = [Environment]::GetEnvironmentVariable("WEALTHBUILDER_RELAY_TOKEN", "User")
+}
 
 $publisherParameters = @{
     RelayUrl            = $relayUrl

@@ -58,7 +58,10 @@ def test_one_shot_failures_are_not_reported_as_success():
 
 def test_launcher_loads_secrets_without_putting_them_on_the_command_line():
     assert 'Join-Path $repoRoot ".env"' in LAUNCHER
+    assert 'GetEnvironmentVariable("WEALTHBUILDER_RELAY_TOKEN", "Process")' in LAUNCHER
     assert 'GetEnvironmentVariable("WEALTHBUILDER_RELAY_TOKEN", "User")' in LAUNCHER
+    assert 'GetEnvironmentVariable("WEALTHBUILDER_RELAY_URL", "Process")' in LAUNCHER
+    assert 'GetEnvironmentVariable("WEALTHBUILDER_RELAY_URL", "User")' in LAUNCHER
     assert "BridgeToken         = $bridgeToken" in LAUNCHER
     assert "Write-Host $bridgeToken" not in LAUNCHER
     assert '-File "%~dp0Start-FounderSnapshotRelay.ps1"' in WINDOWS_LAUNCHER
